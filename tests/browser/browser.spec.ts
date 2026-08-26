@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { settle } from '../../src/browser/settle.js';
 import { looksLikeLogin } from '../../src/browser/guard.js';
+import { createContext } from '../../src/browser/context.js';
 import { bindCandidate } from '../../src/locator/bind.js';
 import { withDefaults } from '../../src/config.js';
 
@@ -56,4 +57,33 @@ test('bindCandidate resolves the same node renderCandidate describes', async ({ 
     candidate: { strategy: 'testId', value: 'cart-link' },
   });
   await expect(loc).toHaveCount(1);
+});
+
+test('createContext strips empty extraHTTPHeaders so an unset bypass token is not sent as the literal value', async ({ browser }) => {
+  const config = withDefaults({
+    seed: 'https://s.test',
+    contextOptions: { extraHTTPHeaders: { 'x-bypass-token': '', 'x-real-header': 'abc123' } },
+  });
+  const context = await createContext(browser, config);
+  const page = await context.newPage();
+  let seenHeaders: Record<string, string> = {};
+  await page.route('**/*', (route) => {
+    seenHeaders = route.request().headers();
+    route.fulfill({ body: 'ok', contentType: 'text/plain' });
+  });
+  await page.goto('https://s.test/');
+  expect(seenHeaders['x-real-header']).toBe('abc123');
+  expect(seenHeaders['x-bypass-token']).toBeUndefined();
+  await context.close();
+});
+
+// On the installed Playwright version (1.62.1), browser.newContext({ storageState: '' })
+// does not actually throw, so this test can't discriminate the guard's effect on a
+// throw path. It's kept as a smoke check that createContext tolerates a falsy
+// storageState in contextOptions without erroring, per ruling R21's fallback guidance.
+test('createContext drops a falsy storageState rather than passing it through', async ({ browser }) => {
+  const config = withDefaults({ seed: 'https://s.test', contextOptions: { storageState: '' } });
+  const context = await createContext(browser, config);
+  await expect(context.newPage()).resolves.toBeDefined();
+  await context.close();
 });
