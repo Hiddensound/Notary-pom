@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "license": "Apache-2.0",
   "type": "module",
-  "bin": { "pombuilder": "./dist/src/cli.js" },
+  "bin": {
+    "pombuilder": "./dist/src/cli.js"
+  },
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
@@ -17,7 +19,7 @@
   "devDependencies": {
     "@playwright/test": "^1.62.1",
     "@types/node": "^26.3.0",
-    "typescript": "^7.0.2",
+    "typescript": "^5.9.3",
     "vitest": "^4.1.11"
   }
 }
