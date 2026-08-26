@@ -44,6 +44,22 @@ describe('diffNotebooks', () => {
     expect(r.elements[0].change).toBe('nowUnresolved');
   });
 
+  it('reports a renamed element', () => {
+    const before = el('a');
+    const after = el('a', { name: 'saveChangesButton' });
+    const r = diffNotebooks(nb([pg([before])]), nb([pg([after])]));
+    expect(r.elements[0].change).toBe('renamed');
+    expect(r.elements[0].detail).toBe('someButton -> saveChangesButton');
+  });
+
+  it('reports an element that started resolving', () => {
+    const before = el('a', { status: 'unresolved', locator: null });
+    const after = el('a');
+    const r = diffNotebooks(nb([pg([before])]), nb([pg([after])]));
+    expect(r.elements[0].change).toBe('nowResolved');
+    expect(r.elements[0].detail).toBe('testId');
+  });
+
   it('reports page-level changes', () => {
     const other = { ...pg([]), routeTemplate: '/q' };
     const r = diffNotebooks(nb([pg([])]), nb([pg([]), other]));
