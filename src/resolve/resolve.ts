@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { Page } from '@playwright/test';
-import type { ElementRecord, IRElement, RejectedCandidate, ScopedCandidate } from '../types.js';
+import type { ElementRecord, IRCollection, IRElement, RejectedCandidate, ScopedCandidate } from '../types.js';
 import { buildCandidates, scopeTo } from '../locator/candidates.js';
 import { bindCandidate } from '../locator/bind.js';
 import { fingerprintElement } from '../ir/fingerprint.js';
 import { deterministicName } from '../name/deterministic.js';
 import { resolveCollisions } from '../name/collisions.js';
+import { detectCollections } from './collections.js';
 
 interface Verdict {
   winner: ScopedCandidate | null;
@@ -44,13 +45,21 @@ async function adjudicate(page: Page, record: ElementRecord): Promise<Verdict> {
   return { winner: null, rejected };
 }
 
+export interface ResolveResult {
+  elements: IRElement[];
+  collections: IRCollection[];
+}
+
 export async function resolveElements(
   page: Page,
   records: ElementRecord[],
   routeTemplate: string,
-): Promise<IRElement[]> {
+): Promise<ResolveResult> {
+  const { collections, consumed } = detectCollections(records);
+  const kept = records.filter((r) => !consumed.has(r.domPath));
+
   const named = resolveCollisions(
-    records.map((record) => ({ record, ...deterministicName(record) })),
+    kept.map((record) => ({ record, ...deterministicName(record) })),
   );
 
   const out: IRElement[] = [];
@@ -72,5 +81,5 @@ export async function resolveElements(
     });
   }
 
-  return out;
+  return { elements: out, collections };
 }
