@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en"><head><title>Shop</title></head>
+<body>
+  <header>
+    <nav aria-label="Main">
+      <a href="/">Home</a>
+      <a href="/cart" data-testid="cart-link">Cart</a>
+    </nav>
+    <form role="search"><input type="search" placeholder="Search products" /></form>
+  </header>
+  <main>
+    <h1>Red Mug</h1>
+    <span data-testid="product-price">$24.99</span>
+    <span>Unlabelled prose that should be skipped</span>
+    <label for="qty">Quantity</label>
+    <input id="qty" type="number" />
+    <button data-testid="add-to-cart">Add to cart</button>
+    <button aria-label="Share this product"></button>
+    <div role="status">Added to bag</div>
+    <img src="/mug.png" alt="Red mug photo" />
+  </main>
+  <footer><a href="/privacy">Privacy</a></footer>
+</body></html>
