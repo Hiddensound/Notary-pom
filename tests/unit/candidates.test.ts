@@ -92,4 +92,31 @@ describe('renderCandidate', () => {
     const sc = { scope: null, fragile: false, candidate: { strategy: 'testId' as const, value: "o'brien" } };
     expect(renderCandidate(sc)).toBe("this.page.getByTestId('o\\'brien')");
   });
+
+  it('R16: escapes line terminators to prevent syntax errors', () => {
+    const sc = { scope: null, fragile: false, candidate: { strategy: 'title' as const, value: 'Foo\nBar' } };
+    const out = renderCandidate(sc);
+    expect(out).not.toMatch(/[\n\r]/);
+    expect(out).toContain('\\n');
+  });
+
+  it('renders label locator', () => {
+    const sc = { scope: null, fragile: false, candidate: { strategy: 'label' as const, value: 'Email', exact: true } };
+    expect(renderCandidate(sc)).toBe("this.page.getByLabel('Email', { exact: true })");
+  });
+
+  it('renders placeholder locator', () => {
+    const sc = { scope: null, fragile: false, candidate: { strategy: 'placeholder' as const, value: 'Enter name' } };
+    expect(renderCandidate(sc)).toBe("this.page.getByPlaceholder('Enter name')");
+  });
+
+  it('renders altText locator', () => {
+    const sc = { scope: null, fragile: false, candidate: { strategy: 'altText' as const, value: 'Logo' } };
+    expect(renderCandidate(sc)).toBe("this.page.getByAltText('Logo')");
+  });
+
+  it('renders title locator', () => {
+    const sc = { scope: null, fragile: false, candidate: { strategy: 'title' as const, value: 'Help' } };
+    expect(renderCandidate(sc)).toBe("this.page.getByTitle('Help')");
+  });
 });

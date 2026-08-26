@@ -1,8 +1,19 @@
-// SPDX-License-Identifier: Apache-2.0
+﻿// SPDX-License-Identifier: Apache-2.0
 
 import type { ScopedCandidate } from '../types.js';
 
-const q = (s: string) => `'${s.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+const q = (s: string) => {
+  const escapes: Record<string, string> = {
+    '\\': '\\\\',
+    "'": "\\'",
+    '\n': '\\n',
+    '\r': '\\r',
+    '\u2028': '\\u2028',
+    '\u2029': '\\u2029',
+  };
+  const escaped = s.replace(/[\\'\n\r\u2028\u2029]/g, (ch) => escapes[ch]!);
+  return `'${escaped}'`;
+};
 
 export function renderCall(c: ScopedCandidate['candidate']): string {
   switch (c.strategy) {
