@@ -93,80 +93,81 @@ export async function crawlSite(
   const context = await createContext(browser, config);
   if (routeHandler) await context.route('**/*', routeHandler);
 
-  const origin = new URL(config.seed).origin;
-  let robots: ReturnType<typeof robotsParser> | null = null;
+  try {
+    const origin = new URL(config.seed).origin;
+    let robots: ReturnType<typeof robotsParser> | null = null;
 
-  const page = await context.newPage();
+    const page = await context.newPage();
 
-  if (config.respectRobots && !routeHandler) {
-    try {
-      const res = await page.request.get(`${origin}/robots.txt`);
-      if (res.ok()) robots = robotsParser(`${origin}/robots.txt`, await res.text());
-    } catch { /* no robots.txt is not an error */ }
-  }
-
-  // ---- pass 1: discover URLs ----
-  const seed = scrubUrl(config.seed);
-  const queue: Array<{ url: string; depth: number }> = [{ url: seed, depth: 0 }];
-  const seen = new Set<string>([seed]);
-  const discovered: string[] = [];
-
-  while (queue.length && discovered.length < config.maxPages) {
-    const { url, depth } = queue.shift()!;
-    await page.goto(url, { waitUntil: 'domcontentloaded' });
-    await settle(page);
-
-    if (await looksLikeLogin(page, config)) {
-      await context.close();
-      throw new LoginRedirectError(page.url());
+    if (config.respectRobots && !routeHandler) {
+      try {
+        const res = await page.request.get(`${origin}/robots.txt`);
+        if (res.ok()) robots = robotsParser(`${origin}/robots.txt`, await res.text());
+      } catch { /* no robots.txt is not an error */ }
     }
 
-    discovered.push(url);
-    if (depth >= config.maxDepth) continue;
+    // ---- pass 1: discover URLs ----
+    const seed = scrubUrl(config.seed);
+    const queue: Array<{ url: string; depth: number }> = [{ url: seed, depth: 0 }];
+    const seen = new Set<string>([seed]);
+    const discovered: string[] = [];
 
-    const links = await page.$$eval('a[href]', (nodes) =>
-      nodes.map((n) => ({ href: (n as HTMLAnchorElement).href, text: n.textContent?.trim() ?? '' })));
+    while (queue.length && discovered.length < config.maxPages) {
+      const { url, depth } = queue.shift()!;
+      await page.goto(url, { waitUntil: 'domcontentloaded' });
+      await settle(page);
 
-    for (const link of links) {
-      if (isDenied(link.href, link.text)) continue;
-      let next: string;
-      try { next = scrubUrl(link.href); } catch { continue; }
-      if (new URL(next).origin !== origin) continue;
-      const pathname = new URL(next).pathname;
-      if (config.exclude.length && matchesAny(pathname, config.exclude)) continue;
-      if (config.include.length && !matchesAny(pathname, config.include)) continue;
-      if (robots && !robots.isAllowed(next)) continue;
-      if (seen.has(next)) continue;
-      seen.add(next);
-      queue.push({ url: next, depth: depth + 1 });
+      if (await looksLikeLogin(page, config)) {
+        throw new LoginRedirectError(page.url());
+      }
+
+      discovered.push(url);
+      if (depth >= config.maxDepth) continue;
+
+      const links = await page.$$eval('a[href]', (nodes) =>
+        nodes.map((n) => ({ href: (n as HTMLAnchorElement).href, text: n.textContent?.trim() ?? '' })));
+
+      for (const link of links) {
+        if (isDenied(link.href, link.text)) continue;
+        let next: string;
+        try { next = scrubUrl(link.href); } catch { continue; }
+        if (new URL(next).origin !== origin) continue;
+        const pathname = new URL(next).pathname;
+        if (config.exclude.length && matchesAny(pathname, config.exclude)) continue;
+        if (config.include.length && !matchesAny(pathname, config.include)) continue;
+        if (robots && !robots.isAllowed(next)) continue;
+        if (seen.has(next)) continue;
+        seen.add(next);
+        queue.push({ url: next, depth: depth + 1 });
+      }
     }
-  }
 
-  // ---- pass 2: harvest one representative per route template ----
-  const pages: PageIR[] = [];
+    // ---- pass 2: harvest one representative per route template ----
+    const pages: PageIR[] = [];
 
-  const groups = await validateGroups(page, templateRoutes(discovered), config);
-  for (const group of groups) {
-    await page.goto(group.representativeUrl, { waitUntil: 'domcontentloaded' });
-    await settle(page);
+    const groups = await validateGroups(page, templateRoutes(discovered), config);
+    for (const group of groups) {
+      await page.goto(group.representativeUrl, { waitUntil: 'domcontentloaded' });
+      await settle(page);
 
-    if (await looksLikeLogin(page, config)) {
-      await context.close();
-      throw new LoginRedirectError(page.url());
+      if (await looksLikeLogin(page, config)) {
+        throw new LoginRedirectError(page.url());
+      }
+
+      const snapshot = await page.locator('body').ariaSnapshot();
+      const records = await harvest(page, config.testIdAttribute);
+      const { elements, collections } = await resolveElements(page, records, group.routeTemplate);
+
+      pages.push(buildPageIR({
+        group,
+        pageFingerprint: fingerprintPage(snapshot),
+        elements,
+        collections,
+      }));
     }
 
-    const snapshot = await page.locator('body').ariaSnapshot();
-    const records = await harvest(page, config.testIdAttribute);
-    const { elements, collections } = await resolveElements(page, records, group.routeTemplate);
-
-    pages.push(buildPageIR({
-      group,
-      pageFingerprint: fingerprintPage(snapshot),
-      elements,
-      collections,
-    }));
+    return buildNotebook(origin, pages, new Date().toISOString());
+  } finally {
+    await context.close();
   }
-
-  await context.close();
-  return buildNotebook(origin, pages, new Date().toISOString());
 }
