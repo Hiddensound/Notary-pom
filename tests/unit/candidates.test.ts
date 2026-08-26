@@ -57,8 +57,11 @@ describe('buildCandidates', () => {
     // Both should have identical css values
     expect(css1.value).toBe(css2.value);
 
-    // The value should NOT contain :nth-child
-    expect(css1.value).not.toMatch(/:nth-child/);
+    // Parent indices preserved, element's own index removed
+    expect(css1.value).toBe('body > main:nth-child(1) > button');
+
+    // No positional index on the element itself (at the end)
+    expect(css1.value).not.toMatch(/:nth-child\(\d+\)$/);
   });
 });
 

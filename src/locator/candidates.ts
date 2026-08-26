@@ -6,9 +6,7 @@ const unscoped = (candidate: ScopedCandidate['candidate'], fragile = false): Sco
   ({ scope: null, candidate, fragile });
 
 export function parentPath(domPath: string): string {
-  const segments = domPath.split(' > ');
-  const parent = segments.slice(0, -1).map(seg => seg.replace(/:[\w-]+\([^)]*\)/g, '')).join(' > ');
-  return parent;
+  return domPath.split(' > ').slice(0, -1).join(' > ');
 }
 
 export function buildCandidates(r: ElementRecord): ScopedCandidate[] {
