@@ -70,6 +70,44 @@ describe('emitSubclass', () => {
   });
 });
 
+describe('emitBase action name collision handling', () => {
+  const collisionPage: PageIR = {
+    routeTemplate: '/details/:param1',
+    representativeUrl: 'https://s.test/details/a',
+    sampleUrls: ['https://s.test/details/a'],
+    className: 'DetailsPage',
+    pageFingerprint: 'pg_collision',
+    elements: [
+      el({ id: 'el_1', name: 'addToCartButton', kind: 'interactive', role: 'button', status: 'resolved',
+           locator: { scope: null, fragile: false, candidate: { strategy: 'testId', value: 'add-to-cart' } } }),
+      el({ id: 'el_2', name: 'viewDetailsButton', kind: 'interactive', role: 'button', status: 'resolved',
+           accessibleName: 'View details', locator: { scope: null, fragile: false, candidate: { strategy: 'testId', value: 'view-details-btn' } } }),
+      el({ id: 'el_3', name: 'viewDetailsLink', kind: 'interactive', role: 'link', status: 'resolved',
+           accessibleName: 'View details', locator: { scope: null, fragile: false, candidate: { strategy: 'testId', value: 'view-details-link' } } }),
+    ],
+    collections: [],
+  };
+
+  const src = emitBase(collisionPage);
+
+  it('resolves action name collisions by using full element names', () => {
+    // Both elements would reduce to "ViewDetails" when stripped, creating a collision
+    // The fix should use full names: "clickViewDetailsButton" and "clickViewDetailsLink"
+    expect(src).toContain('async clickViewDetailsButton(): Promise<void> { await this.viewDetailsButton.click(); }');
+    expect(src).toContain('async clickViewDetailsLink(): Promise<void> { await this.viewDetailsLink.click(); }');
+  });
+
+  it('does not emit a bare clickViewDetails action (the collision)', () => {
+    // Verify the bare name (without the role suffix) does NOT appear
+    expect(src).not.toContain('async clickViewDetails(): Promise<void>');
+  });
+
+  it('keeps short names for non-colliding elements', () => {
+    // "addToCartButton" strips to "AddToCart" with no collision, so it keeps the short form
+    expect(src).toContain('async clickAddToCart(): Promise<void> { await this.addToCartButton.click(); }');
+  });
+});
+
 describe('emitSmoke', () => {
   const src = emitSmoke(page);
 
