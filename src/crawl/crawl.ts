@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import type { Browser, Route } from '@playwright/test';
+import type { Browser, Page, Route } from '@playwright/test';
 import robotsParserImport from 'robots-parser';
-import type { Notebook, PageIR, PomBuilderConfig } from '../types.js';
+import type { Notebook, PageIR, PomBuilderConfig, RouteGroup } from '../types.js';
 import { createContext } from '../browser/context.js';
 import { settle } from '../browser/settle.js';
 import { LoginRedirectError, looksLikeLogin } from '../browser/guard.js';
@@ -12,7 +12,8 @@ import { templateRoutes } from '../url/routeTemplate.js';
 import { scrubUrl } from '../url/scrub.js';
 import { isDenied } from '../url/denyList.js';
 import { buildNotebook, buildPageIR } from '../ir/build.js';
-import { fingerprintPage } from '../ir/fingerprint.js';
+import { fingerprintPage, structuralFingerprint } from '../ir/fingerprint.js';
+import { compareStrings } from '../util/order.js';
 
 // robots-parser's shipped index.d.ts declares its export with ESM `export default`
 // syntax, but the package has no "type": "module" in package.json (its runtime is
@@ -38,6 +39,50 @@ const robotsParser = robotsParserImport as unknown as (url: string, robotstxt: s
 
 function matchesAny(pathname: string, patterns: string[]): boolean {
   return patterns.some((p) => new RegExp('^' + p.replace(/\*/g, '.*') + '$').test(pathname));
+}
+
+// The spec validates a route template by comparing two of its samples. Templates with a
+// single sample are trivially consistent and cost nothing to accept.
+export async function validateGroups(
+  page: Page,
+  groups: RouteGroup[],
+  config: PomBuilderConfig,
+): Promise<RouteGroup[]> {
+  const out: RouteGroup[] = [];
+
+  for (const group of groups) {
+    if (group.sampleUrls.length < 2 || !group.routeTemplate.includes(':param')) {
+      out.push(group);
+      continue;
+    }
+
+    const [first, second] = [group.representativeUrl, group.sampleUrls[1]];
+    const prints: string[] = [];
+    for (const url of [first, second]) {
+      await page.goto(url, { waitUntil: 'domcontentloaded' });
+      await settle(page);
+      if (await looksLikeLogin(page, config)) throw new LoginRedirectError(page.url());
+      prints.push(structuralFingerprint(await page.locator('body').ariaSnapshot()));
+    }
+
+    if (prints[0] === prints[1]) {
+      out.push(group);
+      continue;
+    }
+
+    // Structures disagree: the URL shape was a coincidence, not a template. Fall back to
+    // one literal route per sample rather than emitting a page object that is right for
+    // some of them and quietly wrong for the rest.
+    for (const url of group.sampleUrls) {
+      out.push({
+        routeTemplate: new URL(url).pathname,
+        representativeUrl: url,
+        sampleUrls: [url],
+      });
+    }
+  }
+
+  return out.sort((a, b) => compareStrings(a.routeTemplate, b.routeTemplate));
 }
 
 export async function crawlSite(
@@ -100,7 +145,8 @@ export async function crawlSite(
   // ---- pass 2: harvest one representative per route template ----
   const pages: PageIR[] = [];
 
-  for (const group of templateRoutes(discovered)) {
+  const groups = await validateGroups(page, templateRoutes(discovered), config);
+  for (const group of groups) {
     await page.goto(group.representativeUrl, { waitUntil: 'domcontentloaded' });
     await settle(page);
 

@@ -23,3 +23,17 @@ export function classNameForRoute(routeTemplate: string): string {
   const pascal = words.map((w) => w[0].toUpperCase() + w.slice(1).toLowerCase()).join('');
   return (pascal || 'Root') + 'Page';
 }
+
+// An aria snapshot embeds accessible names ( heading "Red Mug" ), which differ across
+// two instances of the same template. Stripping the quoted names leaves the structure —
+// roles, nesting and non-name attributes — which is what template validation compares.
+export function structuralFingerprint(ariaSnapshot: string): string {
+  const structure = ariaSnapshot
+    .replace(/"(?:[^"\\]|\\.)*"/g, '""')
+    .replace(/[ \t]+/g, ' ')
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim().length > 0)
+    .join('\n');
+  return 'st_' + createHash('sha256').update(structure).digest('hex').slice(0, 16);
+}
