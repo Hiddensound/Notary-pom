@@ -12,9 +12,11 @@
     "test:browser": "playwright test"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "commander": "^15.0.0",
     "playwright": "^1.62.1",
-    "robots-parser": "^3.0.1"
+    "robots-parser": "^3.0.1",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@anthropic-ai/sdk": "^0.121.0",

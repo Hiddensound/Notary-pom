@@ -5,3 +5,8 @@ dist
 *.log
 test-results/
 playwright-report/
+
+# POMBuilder's own notebook cache (default `irDir`). Regenerable local IR state from
+# running the crawler against a live site, analogous to a build cache - never meant to
+# be committed, in this repo or in a project that depends on POMBuilder.
+.pombuilder/
