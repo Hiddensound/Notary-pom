@@ -27,7 +27,7 @@ import { compareStrings } from '../util/order.js';
 // local interface mirrors the Robots shape robots-parser documents in its own
 // index.d.ts, and the cast through `unknown` recovers a precisely-typed, callable
 // function rather than reaching for `any`.
-interface Robots {
+export interface Robots {
   isAllowed(url: string, ua?: string): boolean | undefined;
   isDisallowed(url: string, ua?: string): boolean | undefined;
   getMatchingLineNumber(url: string, ua?: string): number;
@@ -39,6 +39,38 @@ const robotsParser = robotsParserImport as unknown as (url: string, robotstxt: s
 
 function matchesAny(pathname: string, patterns: string[]): boolean {
   return patterns.some((p) => new RegExp('^' + p.replace(/\*/g, '.*') + '$').test(pathname));
+}
+
+// Pass 1's per-link filtering decision, pulled out as a pure function so it is directly
+// unit-testable (a real `robots-parser` instance, no browser) rather than only reachable
+// through a full `crawlSite` run.
+//
+// The robots.txt check runs against `link.href` -- the browser-resolved, un-normalised
+// URL -- and NOT against `scrubUrl`'s output. `scrubUrl` strips a trailing slash (among
+// other things), and a `Disallow` rule anchored with a trailing slash (a common
+// robots.txt idiom) would otherwise be silently defeated for every query-string variant
+// of that same path: `/ecommerce/?x=1` is blocked by `Disallow: /ecommerce/`, but the
+// scrubbed `/ecommerce?x=1` is not, because it no longer starts with `/ecommerce/`.
+// Checking the raw href first means the site's own published rule is honoured exactly
+// as written, regardless of what URL-canonicalisation happens afterwards.
+export function shouldFollow(
+  link: { href: string; text: string },
+  origin: string,
+  config: PomBuilderConfig,
+  robots: Robots | null,
+): string | null {
+  if (isDenied(link.href, link.text)) return null;
+  if (robots && !robots.isAllowed(link.href)) return null;
+
+  let next: string;
+  try { next = scrubUrl(link.href); } catch { return null; }
+  if (new URL(next).origin !== origin) return null;
+
+  const pathname = new URL(next).pathname;
+  if (config.exclude.length && matchesAny(pathname, config.exclude)) return null;
+  if (config.include.length && !matchesAny(pathname, config.include)) return null;
+
+  return next;
 }
 
 // The spec validates a route template by comparing two of its samples. Templates with a
@@ -128,14 +160,8 @@ export async function crawlSite(
         nodes.map((n) => ({ href: (n as HTMLAnchorElement).href, text: n.textContent?.trim() ?? '' })));
 
       for (const link of links) {
-        if (isDenied(link.href, link.text)) continue;
-        let next: string;
-        try { next = scrubUrl(link.href); } catch { continue; }
-        if (new URL(next).origin !== origin) continue;
-        const pathname = new URL(next).pathname;
-        if (config.exclude.length && matchesAny(pathname, config.exclude)) continue;
-        if (config.include.length && !matchesAny(pathname, config.include)) continue;
-        if (robots && !robots.isAllowed(next)) continue;
+        const next = shouldFollow(link, origin, config, robots);
+        if (!next) continue;
         if (seen.has(next)) continue;
         seen.add(next);
         queue.push({ url: next, depth: depth + 1 });

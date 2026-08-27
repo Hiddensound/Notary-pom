@@ -13,23 +13,24 @@
 // site (https://www.scrapingcourse.com/ecommerce/) faster and more courteous while still
 // exercising route templating, collections and the resolver against real markup.
 //
-// `maxDepth: 0` is deliberate, not a workaround to dodge failures: this site's
-// robots.txt is `Disallow: /ecommerce/*`, which (matched against the request path
-// including a trailing slash) blocks every sub-path - including every product detail
-// page - while the bare listing path `/ecommerce` itself slips through because it has
-// no trailing slash. Crawling deeper than the seed therefore cannot discover any
-// additional *route template* here, it can only follow same-page WooCommerce
-// "add-to-cart" anchors (`/ecommerce?add-to-cart=<id>`), which are real `<a href>`
-// links, not excludable by `exclude` (which matches pathname only, and these differ
-// only by query string), and are not caught by the deny-list (which flags
-// remove/cancel/delete-style words, not "add"). Visiting one mutates the shared
-// session's server-side cart for the rest of the crawl, so a later harvest of the
-// *same* bare listing page picks up transient mini-cart elements ("View cart",
-// "Remove X from cart") that will not exist in a fresh session - exactly the kind of
-// contamination the generated smoke spec then fails on. Since respecting robots.txt
-// already caps this site at one route, `maxDepth: 0` gets an honest, uncontaminated
-// harvest of that one route without touching crawler source for a single site's quirk.
+// This site's own robots.txt is `Disallow: /ecommerce/*`, which blocks every sub-path
+// of the listing page - including every product detail page - so `maxDepth` beyond the
+// seed cannot discover any additional *route template* here regardless of its value;
+// `maxPages: 20` is enough headroom to prove that on its own without a long crawl.
+//
+// Earlier iterations of this config also carried `maxDepth: 0`, to work around a real
+// crawler bug: `src/crawl/crawl.ts` used to check `robots.isAllowed()` against the URL
+// *after* `scrubUrl` had already stripped a trailing slash, which silently defeated
+// this exact `Disallow: /ecommerce/*` rule for same-page WooCommerce "add-to-cart"
+// anchors (`/ecommerce/?add-to-cart=<id>`) - those links share the bare listing page's
+// pathname, aren't caught by the deny-list (which flags remove/cancel/delete-style
+// words, not "add"), and visiting one mutates the shared session's server-side cart,
+// contaminating a later harvest of the *same* listing page with transient mini-cart
+// elements a fresh session would never see. That has been fixed at the source: the
+// robots.txt check in `src/crawl/crawl.ts` now runs against the original,
+// browser-resolved `href` before any normalisation, so this rule is honoured exactly
+// as the site published it and the add-to-cart links are never even queued. See the
+// "Known limitations" section of README.md for the full writeup.
 export default {
   maxPages: 20,
-  maxDepth: 0,
 };

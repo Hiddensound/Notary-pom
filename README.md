@@ -156,7 +156,7 @@ about 97.6%.
 
 ## MCP server
 
-`mcp/server.ts` (built to `mcp/server.js`) exposes the same crawl/generate/diff
+`mcp/server.ts` (built to `dist/mcp/server.js`) exposes the same crawl/generate/diff
 pipeline as three MCP tools — `pombuilder_crawl`, `pombuilder_generate`,
 `pombuilder_diff` — so an MCP-aware client can drive POMBuilder directly. The tools do
 pure argument marshalling; all of the actual logic still lives in `src/`.
@@ -168,12 +168,39 @@ Add it to `claude_desktop_config.json`:
   "mcpServers": {
     "pombuilder": {
       "command": "node",
-      "args": ["/absolute/path/to/pombuilder/mcp/server.js"]
+      "args": ["/absolute/path/to/pombuilder/dist/mcp/server.js"]
     }
   }
 }
 ```
 
-Run `npm run build` first so `mcp/server.js` exists. The server speaks stdio MCP and
+Run `npm run build` first so `dist/mcp/server.js` exists. The server speaks stdio MCP and
 takes no flags of its own — all configuration (seed URL, `irDir`, `maxPages`, `outDir`)
 is passed per tool call as arguments.
+
+## Known limitations
+
+**Same-page, state-mutating links aren't recognised as such.** The deny-list
+(`src/url/denyList.ts`) only flags destructive-sounding words — sign-out, delete,
+remove, cancel, deactivate, unsubscribe, destroy — in a link's href or text. A plain
+`<a href="?add-to-cart=123">` (a common WooCommerce pattern, among others) reads as an
+ordinary link and passes straight through. If the crawler follows one, it mutates
+shared session state (a server-side cart, in that example) for the rest of the crawl,
+so a *later* harvest of what looks like the same, unchanged page can pick up elements
+that only exist because of that earlier visit — and those elements will not exist in a
+fresh browser session, which is exactly what a generated smoke spec runs in. This
+surfaced for real during this project's own acceptance run against
+`https://www.scrapingcourse.com/ecommerce/` (see `pombuilder.config.js`'s comments for
+the full trace) and is not something POMBuilder currently detects or guards against; if
+a target site has this shape of link, steer the crawler around it with `exclude` (or a
+narrower `maxDepth`) rather than relying on the deny-list to catch it.
+
+**Fixed in this same round: robots.txt was checked against the wrong URL.**
+`src/crawl/crawl.ts`'s link-discovery loop used to call `scrubUrl()` (which, among
+other things, strips a trailing slash) *before* checking `robots.isAllowed()`, so a
+`Disallow` rule anchored with a trailing slash — a very common robots.txt idiom — could
+be silently defeated for any query-string variant of that path. The check now runs
+against the original, browser-resolved `href`, before any normalisation, so a site's
+published rule is honoured exactly as written regardless of what URL canonicalisation
+happens afterwards. See `shouldFollow` in `src/crawl/crawl.ts` and its tests in
+`tests/unit/crawl.test.ts` for the fixed behaviour and the regression it guards against.
