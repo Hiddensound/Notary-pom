@@ -17,9 +17,18 @@
     "robots-parser": "^3.0.1"
   },
   "devDependencies": {
+    "@anthropic-ai/sdk": "^0.121.0",
     "@playwright/test": "^1.62.1",
     "@types/node": "^26.3.0",
     "typescript": "^5.9.3",
     "vitest": "^4.1.11"
+  },
+  "peerDependencies": {
+    "@anthropic-ai/sdk": "*"
+  },
+  "peerDependenciesMeta": {
+    "@anthropic-ai/sdk": {
+      "optional": true
+    }
   }
 }
