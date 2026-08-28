@@ -2,7 +2,10 @@
 
 import type { ScopedCandidate } from '../types.js';
 
-const q = (s: string) => {
+// Exported because page-level interpolations (route, representativeUrl, test titles) go
+// into single-quoted literals in the emitted source too, and an unescaped apostrophe in a
+// pathname -- which `new URL(...).pathname` does not percent-encode -- is a syntax error.
+export const q = (s: string) => {
   const escapes: Record<string, string> = {
     '\\': '\\\\',
     "'": "\\'",

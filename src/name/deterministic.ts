@@ -9,7 +9,9 @@ const ROLE_SUFFIX: Record<string, string> = {
   option: 'Option', status: 'Status', alert: 'Alert',
 };
 
-const RESERVED = new Set([
+// Exported so the member-name arbiter (src/name/members.ts) can extend this one list
+// rather than keeping a second, drifting copy of it.
+export const RESERVED_WORDS: ReadonlySet<string> = new Set([
   'delete', 'new', 'class', 'function', 'return', 'default', 'export',
   'import', 'const', 'let', 'var', 'this', 'super', 'page',
 ]);
@@ -61,6 +63,6 @@ export function deterministicName(r: ElementRecord): { name: string; weak: boole
   const suffix = ROLE_SUFFIX[r.role ?? ''] ?? '';
   let name = base.endsWith(suffix) && suffix ? base : base + suffix;
   if (/^[0-9]/.test(name)) name = 'n' + name;
-  if (RESERVED.has(name)) name = name + 'Element';
+  if (RESERVED_WORDS.has(name)) name = name + 'Element';
   return { name, weak };
 }

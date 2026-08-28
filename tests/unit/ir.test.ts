@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { fingerprintElement, classNameForRoute, fingerprintPage } from '../../src/ir/fingerprint.js';
+import { fingerprintElement, classNameForRoute, fingerprintPage, uniqueClassNames } from '../../src/ir/fingerprint.js';
 import { buildNotebook, buildPageIR } from '../../src/ir/build.js';
+import { templateRoutes } from '../../src/url/routeTemplate.js';
 import type { ElementRecord, IRElement, IRCollection, RouteGroup } from '../../src/types.js';
 
 const base: ElementRecord = {
@@ -37,6 +38,79 @@ describe('classNameForRoute', () => {
   ])('%s -> %s', (route, expected) => {
     expect(classNameForRoute(route)).toBe(expected);
   });
+
+  // Every one of these produced a class name that could not be parsed as a TypeScript
+  // identifier before the segments were sanitised.
+  it.each([
+    ['/about.html', 'AboutHtmlPage'],
+    ['/products/index.php', 'ProductsIndexPhpPage'],
+    ['/docs/v1.2/intro', 'DocsV12IntroPage'],
+    ['/2024/spring-sale', 'N2024SpringSalePage'],
+    ['/2fast', 'N2fastPage'],
+    ['/caf%C3%A9/menu', 'CafC3A9MenuPage'],
+    ["/o'brien", 'OBrienPage'],
+    ['/a+b', 'ABPage'],
+  ])('sanitises %s -> %s', (route, expected) => {
+    expect(classNameForRoute(route)).toBe(expected);
+  });
+
+  it.each([
+    '/', '/about.html', '/products/index.php', '/docs/v1.2/intro', '/2024/spring-sale',
+    '/2fast', '/caf%C3%A9/menu', "/o'brien", '/a+b', '/product/:param1', '/+++', '/~',
+    '/%E4%B8%AD%E6%96%87', '/a b c', '/9', '/-', '/_',
+  ])('%s yields a legal TypeScript identifier', (route) => {
+    expect(classNameForRoute(route)).toMatch(/^[A-Za-z][A-Za-z0-9]*Page$/);
+  });
+});
+
+describe('uniqueClassNames', () => {
+  it('separates a blog index from its posts, which both reduce to BlogPage', () => {
+    expect(classNameForRoute('/blog')).toBe('BlogPage');
+    expect(classNameForRoute('/blog/:param1')).toBe('BlogPage');
+
+    const names = uniqueClassNames(['/blog', '/blog/:param1']);
+    expect(names.get('/blog')).toBe('BlogPage');
+    expect(names.get('/blog/:param1')).toBe('BlogParam1Page');
+  });
+
+  it('separates the real templateRoutes output for a blog index plus posts', () => {
+    const routes = templateRoutes([
+      'https://s.test/blog',
+      'https://s.test/blog/one',
+      'https://s.test/blog/two',
+      'https://s.test/blog/three',
+    ]).map((g) => g.routeTemplate);
+    expect(routes).toEqual(['/blog', '/blog/:param1']);
+
+    const names = [...uniqueClassNames(routes).values()];
+    expect(new Set(names).size).toBe(routes.length);
+    for (const n of names) expect(n).toMatch(/^[A-Za-z][A-Za-z0-9]*Page$/);
+  });
+
+  it('falls through to a route hash when even the verbose names collide', () => {
+    // `/a/:b` and `/a-b` both reduce to `ABPage` at tier 1 and at tier 2.
+    const names = uniqueClassNames(['/a/:b', '/a-b']);
+    expect(new Set(names.values()).size).toBe(2);
+    for (const n of names.values()) expect(n).toMatch(/^[A-Za-z][A-Za-z0-9]*Page$/);
+  });
+
+  it('assigns from the set of routes, not their order', () => {
+    const routes = ['/blog', '/blog/:param1', '/a/:b', '/a-b', '/about.html', '/'];
+    const forward = uniqueClassNames(routes);
+    const backward = uniqueClassNames([...routes].reverse());
+    expect([...forward.entries()].sort()).toEqual([...backward.entries()].sort());
+  });
+
+  it('is injective over a wide route sample', () => {
+    const routes = [
+      '/', '/blog', '/blog/:param1', '/about.html', '/about-html', '/a+b', '/a-b',
+      '/a/:b', "/o'brien", '/o-brien', '/2024/spring-sale', '/caf%C3%A9/menu',
+      '/products/index.php', '/products/index-php',
+    ];
+    const names = uniqueClassNames(routes);
+    expect(names.size).toBe(routes.length);
+    expect(new Set(names.values()).size).toBe(routes.length);
+  });
 });
 
 describe('buildNotebook', () => {
@@ -48,6 +122,19 @@ describe('buildNotebook', () => {
     const nb = buildNotebook('https://s.test', [page('/z'), page('/a')], '2026-01-01T00:00:00Z');
     expect(nb.pages.map((p) => p.routeTemplate)).toEqual(['/a', '/z']);
     expect(nb.version).toBe('1');
+  });
+
+  it('gives two routes that reduce to one class name distinct class names', () => {
+    const page = (routeTemplate: string) => ({
+      routeTemplate, representativeUrl: 'https://s.test' + routeTemplate,
+      sampleUrls: [], className: 'ignored', pageFingerprint: 'f', elements: [], collections: [],
+    });
+    const nb = buildNotebook(
+      'https://s.test',
+      [page('/blog'), page('/blog/:param1')],
+      '2026-01-01T00:00:00Z',
+    );
+    expect(nb.pages.map((p) => p.className)).toEqual(['BlogPage', 'BlogParam1Page']);
   });
 });
 

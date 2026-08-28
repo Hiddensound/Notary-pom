@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { PageIR } from '../types.js';
+import { q } from '../locator/render.js';
 
 export function emitSmoke(page: PageIR): string {
   const resolved = page.elements.filter((e) => e.status === 'resolved' && e.locator);
@@ -15,8 +16,8 @@ export function emitSmoke(page: PageIR): string {
     "import { expect, test } from '@playwright/test';",
     `import { ${page.className} } from '../pages/${page.className}.js';`,
     '',
-    `test('${page.className} locators resolve uniquely', async ({ page }) => {`,
-    `  await page.goto('${page.representativeUrl}');`,
+    `test(${q(`${page.className} locators resolve uniquely`)}, async ({ page }) => {`,
+    `  await page.goto(${q(page.representativeUrl)});`,
     `  const p = new ${page.className}(page);`,
     ...assertions,
     '});',

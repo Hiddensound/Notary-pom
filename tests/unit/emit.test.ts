@@ -121,3 +121,32 @@ describe('emitSmoke', () => {
     expect(src).not.toContain('mysteryButton');
   });
 });
+
+// `new URL(...).pathname`/`.href` do not percent-encode an apostrophe and `scrubUrl` only
+// normalises the query string, so a path is free to carry one into every page-level
+// interpolation. Unescaped, each of the four sites below is a syntax error.
+describe('page-level interpolations are escaped', () => {
+  const apostrophe: PageIR = {
+    ...page,
+    routeTemplate: "/o'brien",
+    representativeUrl: "https://s.test/o'brien?q=it's",
+    className: 'OBrienPage',
+  };
+
+  it('escapes the route and url in the generated base', () => {
+    const src = emitBase(apostrophe);
+    expect(src).toContain("static readonly route = '/o\\'brien';");
+    expect(src).toContain("static readonly url = 'https://s.test/o\\'brien?q=it\\'s';");
+  });
+
+  it('escapes the test title and goto url in the smoke spec', () => {
+    const src = emitSmoke(apostrophe);
+    expect(src).toContain("await page.goto('https://s.test/o\\'brien?q=it\\'s');");
+    expect(src).toContain("test('OBrienPage locators resolve uniquely'");
+  });
+
+  it('escapes an apostrophe in a class name reaching the test title', () => {
+    const src = emitSmoke({ ...apostrophe, className: "O'BrienPage" });
+    expect(src).toContain("test('O\\'BrienPage locators resolve uniquely'");
+  });
+});

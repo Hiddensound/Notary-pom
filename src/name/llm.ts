@@ -4,6 +4,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { IRElement, Notebook, PomBuilderConfig } from '../types.js';
 import { resolveCollisions } from './collisions.js';
+import { resolveMemberNames } from './members.js';
 import { compareStrings } from '../util/order.js';
 
 export type NameCache = Record<string, string>;
@@ -75,7 +76,12 @@ export async function refineNotebookNames(nb: Notebook, config: PomBuilderConfig
     const elements = renamed
       .map((e, i) => ({ ...e, name: settled[i].name }))
       .sort((a, b) => compareStrings(a.name, b.name));
-    return { ...p, elements };
+    // `resolveCollisions` only dedupes elements against each other, and `VALID` above
+    // accepts reserved members such as `page` and `constructor`, so a refined name can
+    // reintroduce exactly the collisions `buildPageIR` already arbitrated. Running the
+    // arbiter again is safe precisely because it is idempotent, and it keeps the notebook
+    // showing the same names that get emitted, so `diff` stays meaningful.
+    return resolveMemberNames({ ...p, elements });
   });
 
   return { ...nb, pages };

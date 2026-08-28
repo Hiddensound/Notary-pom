@@ -47,6 +47,32 @@ describe('writeGenerated', () => {
     await writeGenerated(dir, nb);
     expect(await readFile(base, 'utf8')).toContain('ctaButton');
   });
+
+  it('throws rather than silently overwriting a page that shares a class name', async () => {
+    // Before uniquification, `/blog` and `/blog/:param1` both produced `BlogPage`: the
+    // second write clobbered the first, three files landed while five were reported, and
+    // the `/blog` index page object plus its smoke spec disappeared without a warning.
+    const collided: Notebook = {
+      ...nb,
+      pages: [
+        { ...nb.pages[0], routeTemplate: '/blog', className: 'BlogPage' },
+        { ...nb.pages[0], routeTemplate: '/blog/:param1', className: 'BlogPage' },
+      ],
+    };
+    await expect(writeGenerated(dir, collided)).rejects.toThrow(/Duplicate page class name "BlogPage"/);
+  });
+
+  it('writes nothing at all when it detects a duplicate class name', async () => {
+    const collided: Notebook = {
+      ...nb,
+      pages: [
+        { ...nb.pages[0], routeTemplate: '/blog', className: 'BlogPage' },
+        { ...nb.pages[0], routeTemplate: '/blog/:param1', className: 'BlogPage' },
+      ],
+    };
+    await expect(writeGenerated(dir, collided)).rejects.toThrow();
+    await expect(readFile(join(dir, 'pages', 'generated', 'BlogPage.generated.ts'), 'utf8')).rejects.toThrow();
+  });
 });
 
 describe('notebookStore', () => {
