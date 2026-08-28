@@ -33,7 +33,9 @@ export async function writeGenerated(
       throw new Error(
         `Duplicate page class name ${JSON.stringify(page.className)} for route ` +
         `${JSON.stringify(page.routeTemplate)}: two pages would write the same files. ` +
-        'Refusing to overwrite the first page object.',
+        'Refusing to overwrite the first page object. The notebook is inconsistent -- ' +
+        'delete .pombuilder/notebook.json and re-run `pombuilder crawl` to rebuild it, ' +
+        'and please report the two routes shown above.',
       );
     }
     seen.add(page.className);

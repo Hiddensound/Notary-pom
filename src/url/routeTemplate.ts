@@ -10,6 +10,41 @@ function segmentsOf(url: string): string[] {
   return p === '/' ? [] : p.replace(/^\//, '').split('/');
 }
 
+/**
+ * Collapses groups that share a `routeTemplate` into one, merging their sample URLs.
+ *
+ * `templateRoutes` cannot emit a duplicate -- it keys its groups by template -- but
+ * `validateGroups`' structural-disagreement fallback can: it emits one group per sample
+ * URL keyed by `new URL(url).pathname`, and `scrubUrl` strips only a credential blocklist,
+ * so `utm_*` survives and `/p?utm_source=nav` and `/p?utm_source=footer` are two distinct
+ * URLs sharing one pathname. Two groups with one route template become two `PageIR`s with
+ * one route template, which `uniqueClassNames` cannot separate by route alone and
+ * `diffNotebooks` -- keyed by `routeTemplate` -- silently drops one of.
+ *
+ * The representative URL is recomputed as the lexicographically first sample, matching
+ * `templateRoutes`' own convention, so the result does not depend on which duplicate
+ * arrived first.
+ */
+export function mergeRouteGroups(groups: RouteGroup[]): RouteGroup[] {
+  const merged = new Map<string, RouteGroup>();
+
+  for (const group of groups) {
+    const prev = merged.get(group.routeTemplate);
+    if (!prev) {
+      merged.set(group.routeTemplate, group);
+      continue;
+    }
+    const sampleUrls = [...new Set([...prev.sampleUrls, ...group.sampleUrls])].sort(compareStrings);
+    merged.set(group.routeTemplate, {
+      routeTemplate: group.routeTemplate,
+      representativeUrl: sampleUrls[0] ?? prev.representativeUrl,
+      sampleUrls,
+    });
+  }
+
+  return [...merged.values()].sort((a, b) => compareStrings(a.routeTemplate, b.routeTemplate));
+}
+
 export function templateRoutes(urls: string[]): RouteGroup[] {
   const unique = [...new Set(urls)].sort();
   const byDepth = new Map<number, string[]>();

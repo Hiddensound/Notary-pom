@@ -8,7 +8,7 @@ import { settle } from '../browser/settle.js';
 import { LoginRedirectError, looksLikeLogin } from '../browser/guard.js';
 import { harvest } from '../harvest/harvest.js';
 import { resolveElements } from '../resolve/resolve.js';
-import { templateRoutes } from '../url/routeTemplate.js';
+import { mergeRouteGroups, templateRoutes } from '../url/routeTemplate.js';
 import { scrubUrl } from '../url/scrub.js';
 import { isDenied } from '../url/denyList.js';
 import { buildNotebook, buildPageIR } from '../ir/build.js';
@@ -105,6 +105,12 @@ export async function validateGroups(
     // Structures disagree: the URL shape was a coincidence, not a template. Fall back to
     // one literal route per sample rather than emitting a page object that is right for
     // some of them and quietly wrong for the rest.
+    //
+    // Two samples can share a pathname -- `scrubUrl` keeps `utm_*`, so `/p?utm_source=nav`
+    // and `/p?utm_source=footer` are distinct URLs here -- and the route template is the
+    // pathname, so `mergeRouteGroups` below folds those back into one group. Without it
+    // the notebook carries two pages with one route template, which `uniqueClassNames`
+    // cannot separate by route alone and `diffNotebooks` silently drops one of.
     for (const url of group.sampleUrls) {
       out.push({
         routeTemplate: new URL(url).pathname,
@@ -114,7 +120,7 @@ export async function validateGroups(
     }
   }
 
-  return out.sort((a, b) => compareStrings(a.routeTemplate, b.routeTemplate));
+  return mergeRouteGroups(out);
 }
 
 export async function crawlSite(

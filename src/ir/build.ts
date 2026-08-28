@@ -25,15 +25,19 @@ export function buildPageIR(args: {
 }
 
 export function buildNotebook(site: string, pages: PageIR[], now: string): Notebook {
-  // Class names can only be made injective where every route is visible at once, which is
+  // Class names can only be made injective where every page is visible at once, which is
   // here -- `buildPageIR` sees one page and cannot know what the others reduced to.
-  const classNames = uniqueClassNames(pages.map((p) => p.routeTemplate));
+  const classNames = uniqueClassNames(pages);
   return {
     version: '1',
     site,
     generatedAt: now,
-    pages: [...pages]
-      .map((p) => ({ ...p, className: classNames.get(p.routeTemplate) ?? p.className }))
-      .sort((a, b) => compareStrings(a.routeTemplate, b.routeTemplate)),
+    pages: pages
+      .map((p, i) => ({ ...p, className: classNames[i] }))
+      // Two pages sharing a route template must still order deterministically, so the
+      // representative URL breaks the tie rather than the input array's own order.
+      .sort((a, b) =>
+        compareStrings(a.routeTemplate, b.routeTemplate)
+        || compareStrings(a.representativeUrl, b.representativeUrl)),
   };
 }

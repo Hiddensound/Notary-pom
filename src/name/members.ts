@@ -75,9 +75,10 @@ function firstFree(candidates: string[], fallback: string, isFree: (name: string
 
 // `deterministicName` already resolves its own reserved words by appending `Element`;
 // keep that convention for the reserved *members* this module adds, so a `constructor`
-// element becomes `constructorElement` rather than `constructor2`.
-function elementCandidates(name: string): string[] {
-  return RESERVED_MEMBERS.has(name) ? [name, `${name}Element`] : [name];
+// element becomes `constructorElement` rather than `constructor2`. `name` itself stays in
+// the list only so an entry that stops being reserved keeps it.
+function reservedCandidates(name: string): string[] {
+  return [name, `${name}Element`];
 }
 
 // Claiming order must not depend on the caller's array order, or the arbiter's output
@@ -98,12 +99,29 @@ function claimOrder<T extends { name: string; id: string }>(items: T[]): Array<{
  * exposes is unique and legal, then returns the page with elements and collections
  * re-sorted by their final names.
  *
- * Priority, highest first: reserved members, element getters, collection accessors.
- * Getters outrank collection accessors because a getter name is the primary API surface
- * a user's subclass calls. Action methods are not considered here at all: they are
- * derived at emit time by `planActions`, always yield to everything above, and can always
- * be disambiguated without touching a stored name -- so an action collision never costs a
- * getter rename.
+ * The design decision this module encodes is a **priority ordering**, highest first:
+ *
+ *   1. reserved members
+ *   2. element getters holding a name they were given literally
+ *   3. collection accessors
+ *   4. element getters that only reached their name through a reserved rewrite
+ *   5. action methods
+ *
+ * Getters outrank collection accessors because a getter name is the primary API surface a
+ * user's subclass calls. Actions rank last because they are the only members that can
+ * always be disambiguated without touching a stored name, so an action collision never
+ * costs a getter rename -- renaming the getter `clickHere` to protect a derived
+ * convenience method would break a hand-owned subclass to save something nobody asked
+ * for. A reserved rewrite ranks below every literal name because its holder is a
+ * newcomer to that name: an element legitimately called `urlElement` must not lose it
+ * because an unrelated `url` element appeared and was rewritten onto it.
+ *
+ * The ordering is the whole decision, and it is expressible with or without storing
+ * action names. Splitting the work between `resolveMemberNames` (which settles the names
+ * the notebook records) and `planActions` (which derives the rest at emit time) follows
+ * from ranks 4 and 5 being resolvable *after* everything above them is fixed -- the
+ * dependency runs one way only. It is not forced by `IRElement` having nowhere to put an
+ * action name, though it does happen to avoid changing the notebook's shape.
  *
  * Unresolved elements participate even though they emit nothing. Their names live in the
  * notebook, and basing the member set on `status` would make a getter name shift whenever
@@ -115,9 +133,19 @@ function claimOrder<T extends { name: string; id: string }>(items: T[]): Array<{
 export function resolveMemberNames(page: PageIR): PageIR {
   const claimed = new Set<string>(RESERVED_MEMBERS);
 
+  // Elements holding a literal name claim before elements that need a reserved rewrite.
+  // `claimOrder` sorts on the pre-resolution name, so without this split a reserved `url`
+  // sorts ahead of an incumbent `urlElement` and consumes the incumbent's name, renaming a
+  // getter a user's subclass may already call. The newcomer yields past it instead.
+  const ordered = claimOrder(page.elements);
   const elementNames = new Map<number, string>();
-  for (const { item, index } of claimOrder(page.elements)) {
-    const name = firstFree(elementCandidates(item.name), 'element', (n) => !claimed.has(n));
+  for (const { item, index } of ordered.filter(({ item }) => !RESERVED_MEMBERS.has(item.name))) {
+    const name = firstFree([item.name], 'element', (n) => !claimed.has(n));
+    claimed.add(name);
+    elementNames.set(index, name);
+  }
+  for (const { item, index } of ordered.filter(({ item }) => RESERVED_MEMBERS.has(item.name))) {
+    const name = firstFree(reservedCandidates(item.name), 'element', (n) => !claimed.has(n));
     claimed.add(name);
     elementNames.set(index, name);
   }

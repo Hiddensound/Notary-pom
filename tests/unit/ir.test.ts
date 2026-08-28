@@ -64,52 +64,106 @@ describe('classNameForRoute', () => {
 });
 
 describe('uniqueClassNames', () => {
+  const routed = (routeTemplate: string, representativeUrl = 'https://s.test' + routeTemplate) =>
+    ({ routeTemplate, representativeUrl });
+  const HASHED = /^[A-Za-z][A-Za-z0-9]*Rt[0-9a-f]{8,}Page$/;
+
   it('separates a blog index from its posts, which both reduce to BlogPage', () => {
     expect(classNameForRoute('/blog')).toBe('BlogPage');
     expect(classNameForRoute('/blog/:param1')).toBe('BlogPage');
 
-    const names = uniqueClassNames(['/blog', '/blog/:param1']);
-    expect(names.get('/blog')).toBe('BlogPage');
-    expect(names.get('/blog/:param1')).toBe('BlogParam1Page');
+    expect(uniqueClassNames([routed('/blog'), routed('/blog/:param1')]))
+      .toEqual(['BlogPage', 'BlogParam1Page']);
   });
 
   it('separates the real templateRoutes output for a blog index plus posts', () => {
-    const routes = templateRoutes([
+    const groups = templateRoutes([
       'https://s.test/blog',
       'https://s.test/blog/one',
       'https://s.test/blog/two',
       'https://s.test/blog/three',
-    ]).map((g) => g.routeTemplate);
-    expect(routes).toEqual(['/blog', '/blog/:param1']);
+    ]);
+    expect(groups.map((g) => g.routeTemplate)).toEqual(['/blog', '/blog/:param1']);
 
-    const names = [...uniqueClassNames(routes).values()];
-    expect(new Set(names).size).toBe(routes.length);
+    const names = uniqueClassNames(groups);
+    expect(new Set(names).size).toBe(groups.length);
     for (const n of names) expect(n).toMatch(/^[A-Za-z][A-Za-z0-9]*Page$/);
   });
 
-  it('falls through to a route hash when even the verbose names collide', () => {
-    // `/a/:b` and `/a-b` both reduce to `ABPage` at tier 1 and at tier 2.
-    const names = uniqueClassNames(['/a/:b', '/a-b']);
-    expect(new Set(names.values()).size).toBe(2);
-    for (const n of names.values()) expect(n).toMatch(/^[A-Za-z][A-Za-z0-9]*Page$/);
+  // Tier 3 is only reached when tiers 1 and 2 both fail. `/a/:b` and `/a-b` do NOT
+  // qualify: `/a/:b` drops its parameter at tier 1 and is already `APage`, so that pair
+  // separates immediately and never exercises the hash at all.
+  it('does not reach the hash tier for a pair that separates at tier 1', () => {
+    expect(uniqueClassNames([routed('/a/:b'), routed('/a-b')])).toEqual(['APage', 'ABPage']);
   });
 
-  it('assigns from the set of routes, not their order', () => {
-    const routes = ['/blog', '/blog/:param1', '/a/:b', '/a-b', '/about.html', '/'];
-    const forward = uniqueClassNames(routes);
-    const backward = uniqueClassNames([...routes].reverse());
-    expect([...forward.entries()].sort()).toEqual([...backward.entries()].sort());
+  it('hashes when tier 1 and tier 2 produce the same name for both routes', () => {
+    // `/1` gets the leading-digit guard and `/n1` is already `N1`, so both reduce to
+    // `N1Page` at tier 1, and neither has a parameter segment to add at tier 2.
+    expect(classNameForRoute('/1')).toBe('N1Page');
+    expect(classNameForRoute('/n1')).toBe('N1Page');
+
+    const names = uniqueClassNames([routed('/1'), routed('/n1')]);
+    expect(new Set(names).size).toBe(2);
+    for (const n of names) expect(n).toMatch(HASHED);
+  });
+
+  it('hashes when the tier 2 name is already taken by another route', () => {
+    // `/blog` and `/blog/:param1` both want `BlogPage` at tier 1; at tier 2 the second
+    // wants `BlogParam1Page`, which `/blog-param1` already took at tier 1.
+    const names = uniqueClassNames([routed('/blog'), routed('/blog/:param1'), routed('/blog-param1')]);
+    expect(names[0]).toBe('BlogPage');
+    expect(names[2]).toBe('BlogParam1Page');
+    expect(names[1]).toMatch(HASHED);
+    expect(new Set(names).size).toBe(3);
+  });
+
+  it('hashes every route that reduces to Root', () => {
+    const routes = ['/%', '/+', '/-', '/_', '/~'];
+    for (const r of routes) expect(classNameForRoute(r)).toBe('RootPage');
+
+    const names = uniqueClassNames(routes.map((r) => routed(r)));
+    expect(new Set(names).size).toBe(routes.length);
+    for (const n of names) expect(n).toMatch(HASHED);
+  });
+
+  it('assigns from the set of pages, not their order', () => {
+    const pages = ['/blog', '/blog/:param1', '/blog-param1', '/1', '/n1', '/about.html', '/']
+      .map((r) => routed(r));
+    const forward = pages.map((p, i) => [p.routeTemplate, uniqueClassNames(pages)[i]]);
+    const reversed = [...pages].reverse();
+    const backward = reversed.map((p, i) => [p.routeTemplate, uniqueClassNames(reversed)[i]]);
+    expect(forward.slice().sort()).toEqual(backward.slice().sort());
   });
 
   it('is injective over a wide route sample', () => {
-    const routes = [
-      '/', '/blog', '/blog/:param1', '/about.html', '/about-html', '/a+b', '/a-b',
-      '/a/:b', "/o'brien", '/o-brien', '/2024/spring-sale', '/caf%C3%A9/menu',
-      '/products/index.php', '/products/index-php',
-    ];
-    const names = uniqueClassNames(routes);
-    expect(names.size).toBe(routes.length);
-    expect(new Set(names.values()).size).toBe(routes.length);
+    const pages = [
+      '/', '/blog', '/blog/:param1', '/blog-param1', '/about.html', '/about-html', '/a+b',
+      '/a-b', '/a/:b', "/o'brien", '/o-brien', '/2024/spring-sale', '/caf%C3%A9/menu',
+      '/products/index.php', '/products/index-php', '/1', '/n1', '/%', '/+', '/~',
+    ].map((r) => routed(r));
+    const names = uniqueClassNames(pages);
+    expect(names).toHaveLength(pages.length);
+    expect(new Set(names).size).toBe(pages.length);
+    for (const n of names) expect(n).toMatch(/^[A-Za-z][A-Za-z0-9]*Page$/);
+  });
+
+  // Defence in depth for the case `mergeRouteGroups` now prevents upstream. Keying on
+  // route strings collapsed these two pages into one entry and gave both the same class
+  // name; keying on pages separates them by representative URL instead.
+  it('separates two pages that share a route template', () => {
+    const names = uniqueClassNames([
+      routed('/p', 'https://s.test/p?utm_source=nav'),
+      routed('/p', 'https://s.test/p?utm_source=footer'),
+    ]);
+    expect(names).toHaveLength(2);
+    expect(new Set(names).size).toBe(2);
+    for (const n of names) expect(n).toMatch(/^[A-Za-z][A-Za-z0-9]*Page$/);
+  });
+
+  it('throws rather than returning a duplicate for two wholly identical pages', () => {
+    expect(() => uniqueClassNames([routed('/p'), routed('/p')]))
+      .toThrow(/Cannot derive a unique class name for route "\/p"/);
   });
 });
 

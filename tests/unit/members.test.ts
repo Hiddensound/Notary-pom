@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { actionNameFor, planActions, resolveMemberNames, RESERVED_MEMBERS } from '../../src/name/members.js';
 import { buildNotebook, buildPageIR } from '../../src/ir/build.js';
 import { detectCollections } from '../../src/resolve/collections.js';
+import { deterministicName } from '../../src/name/deterministic.js';
 import { emitBase } from '../../src/emit/base.js';
 import { writeGenerated } from '../../src/io/writeOutput.js';
 import type { ElementRecord, IRCollection, IRElement, Notebook, PageIR } from '../../src/types.js';
@@ -212,6 +213,40 @@ describe('resolveMemberNames: reserved class members', () => {
     const page = buildPage([el({ id: 'el_1', name: 'constructor', role: 'switch' })]);
     expect(page.elements[0].name).toBe('constructorElement');
     expect(emitBase(page)).not.toContain('get constructor(');
+  });
+
+  // Both names below come out of the real deterministicName path: role `switch` has no
+  // ROLE_SUFFIX entry, so aria-label="url" yields `url` and aria-label="URL element"
+  // yields `urlElement`.
+  it('both names in the incumbent case are what deterministicName actually produces', () => {
+    const sw = (ariaLabel: string) => record({ tag: 'div', role: 'switch', ariaLabel, kind: 'interactive' });
+    expect(deterministicName(sw('url')).name).toBe('url');
+    expect(deterministicName(sw('URL element')).name).toBe('urlElement');
+  });
+
+  it('leaves the incumbent urlElement alone and pushes the reserved rewrite past it', () => {
+    // A reserved rewrite is a newcomer to the name it lands on. Taking it from the element
+    // that legitimately holds it would rename a getter a user's subclass already calls.
+    const page = buildPage([
+      el({ id: 'el_1', name: 'urlElement', role: 'switch' }),
+      el({ id: 'el_2', name: 'url', role: 'switch' }),
+    ]);
+    expect(page.elements.map((e) => `${e.id}:${e.name}`)).toEqual(['el_1:urlElement', 'el_2:urlElement2']);
+  });
+
+  it('gives the reserved element the plain rewrite when there is no incumbent', () => {
+    const page = buildPage([el({ id: 'el_2', name: 'url', role: 'switch' })]);
+    expect(page.elements.map((e) => e.name)).toEqual(['urlElement']);
+  });
+
+  it('adding a reserved-named element does not rename the incumbent', () => {
+    const before = buildPage([el({ id: 'el_1', name: 'urlElement', role: 'switch' })]);
+    const after = buildPage([
+      el({ id: 'el_1', name: 'urlElement', role: 'switch' }),
+      el({ id: 'el_2', name: 'url', role: 'switch' }),
+    ]);
+    const nameOf = (p: PageIR, id: string) => p.elements.find((e) => e.id === id)!.name;
+    expect(nameOf(after, 'el_1')).toBe(nameOf(before, 'el_1'));
   });
 
   it.each(['constructor', 'page', 'route', 'url', 'toString'])('never emits a getter named %s', (name) => {
