@@ -5,25 +5,60 @@ export function harvestInPage(testIdAttribute: string): ElementRecord[] {
   const INTERACTIVE = 'a[href],button,input,select,textarea,summary,[role=button],[role=link],[role=tab],[role=menuitem],[role=checkbox],[role=radio],[role=combobox],[role=switch]';
   const HEADINGS = 'h1,h2,h3,h4,h5,h6,[role=heading]';
   const TEXTISH = `[role=status],[role=alert],[${testIdAttribute}]`;
-  const LANDMARKS: Record<string, string> = {
-    HEADER: 'banner', NAV: 'navigation', MAIN: 'main', FOOTER: 'contentinfo', ASIDE: 'complementary',
-  };
   const LANDMARK_ROLES = ['banner', 'navigation', 'main', 'contentinfo', 'complementary', 'search'];
 
-  // Measured against the installed Playwright (1.62.1), not recalled from the ARIA spec:
-  // `<header>`/`<footer>` are banner/contentinfo only when they are NOT inside sectioning
-  // content, where "sectioning content" is an article/aside/main/nav/section element or an
-  // element whose explicit role is article/complementary/main/navigation/region. A plain
-  // `<div>`, or one with `role="generic"`/`"group"`/`"presentation"`, does not scope them.
-  // `<aside>`, `<nav>` and `<main>` are landmarks unconditionally on this version --
-  // Playwright does not implement the newer "a nested `<aside>` needs an accessible name"
-  // rule -- so only header and footer are listed here. The invariant this function owes is
-  // agreement with Playwright's role engine, because that engine is what `getByRole`
-  // re-scoping binds against; a disagreement makes the resolver narrow to a landmark the
-  // element is not in and bind somebody else's element.
-  const SECTIONED_LANDMARKS: Record<string, boolean> = { HEADER: true, FOOTER: true };
-  const SECTIONING = 'article,aside,main,nav,section,'
+  // The invariant this file owes is agreement with Playwright's role engine, because that
+  // engine is what the resolver's `page.getByRole(landmark)` re-scoping binds against. A
+  // disagreement in one direction narrows to a landmark the element is not in and binds
+  // somebody else's element; a disagreement in the other silently costs a resolvable
+  // element. So the rules below are transcribed from `roleUtils.ts` in the installed
+  // playwright-core (1.62.1) rather than recalled from the ARIA spec, and
+  // `tests/browser/landmark.spec.ts` re-derives them by asking the live `getByRole`.
+  //
+  // Playwright's own `validRoles`, verbatim. A `role` token that is not in this set is not
+  // a role to Playwright at all -- `<nav role="garbage">` and `<nav role="NAV">` both fall
+  // straight back to the tag's implicit role. Treating any non-empty `role` as
+  // authoritative loses every one of those landmarks.
+  const VALID_ARIA_ROLES = new Set([
+    'alert', 'alertdialog', 'application', 'article', 'banner', 'blockquote', 'button',
+    'caption', 'cell', 'checkbox', 'code', 'columnheader', 'combobox', 'complementary',
+    'contentinfo', 'definition', 'deletion', 'dialog', 'directory', 'document', 'emphasis',
+    'feed', 'figure', 'form', 'generic', 'grid', 'gridcell', 'group', 'heading', 'img',
+    'insertion', 'link', 'list', 'listbox', 'listitem', 'log', 'main', 'mark', 'marquee',
+    'math', 'meter', 'menu', 'menubar', 'menuitem', 'menuitemcheckbox', 'menuitemradio',
+    'navigation', 'none', 'note', 'option', 'paragraph', 'presentation', 'progressbar',
+    'radio', 'radiogroup', 'region', 'row', 'rowgroup', 'rowheader', 'scrollbar', 'search',
+    'searchbox', 'separator', 'slider', 'spinbutton', 'status', 'strong', 'subscript',
+    'superscript', 'switch', 'tab', 'table', 'tablist', 'tabpanel', 'term', 'textbox',
+    'time', 'timer', 'toolbar', 'tooltip', 'tree', 'treegrid', 'treeitem',
+  ]);
+
+  // Playwright's `kGlobalAriaAttributes`, minus its per-role prohibition lists. Those lists
+  // only ever prohibit `aria-label`/`aria-labelledby`/`aria-roledescription` for roles like
+  // `generic` and `presentation`; no landmark role appears in any of them, and neither does
+  // the empty role, so within this function the prohibitions can never change the answer.
+  const GLOBAL_ARIA_ATTRIBUTES = [
+    'aria-atomic', 'aria-busy', 'aria-controls', 'aria-current', 'aria-describedby',
+    'aria-details', 'aria-dropeffect', 'aria-flowto', 'aria-grabbed', 'aria-hidden',
+    'aria-keyshortcuts', 'aria-label', 'aria-labelledby', 'aria-live', 'aria-owns',
+    'aria-relevant', 'aria-roledescription',
+  ];
+
+  // Playwright's `kAncestorPreventingLandmark`, verbatim. Note `:not([role])`: the
+  // *presence* of a role attribute, whatever it says, disqualifies a sectioning tag from
+  // suppressing a nested header/footer. `<article role="">`, `<article role="garbage">` and
+  // `<section role="group">` therefore all leave a nested `<footer>` as contentinfo.
+  const ANCESTOR_PREVENTING_LANDMARK = 'article:not([role]),aside:not([role]),main:not([role]),'
+    + 'nav:not([role]),section:not([role]),'
     + '[role=article],[role=complementary],[role=main],[role=navigation],[role=region]';
+
+  // `<aside>`, `<nav>`, `<main>` and `<search>` are landmarks unconditionally on this
+  // version -- Playwright does not implement the newer "a nested `<aside>` needs an
+  // accessible name" rule -- so only header and footer consult the selector above.
+  const IMPLICIT_LANDMARK: Record<string, string> = {
+    NAV: 'navigation', MAIN: 'main', ASIDE: 'complementary', SEARCH: 'search',
+  };
+  const SECTIONED_LANDMARK: Record<string, string> = { HEADER: 'banner', FOOTER: 'contentinfo' };
 
   const IMPLICIT_ROLE: Record<string, string> = {
     A: 'link', BUTTON: 'button', SELECT: 'combobox', TEXTAREA: 'textbox',
@@ -85,22 +120,55 @@ export function harvestInPage(testIdAttribute: string): ElementRecord[] {
     return text || null;
   }
 
+  // Playwright's `getExplicitAriaRole`: split the attribute on a literal space (NOT on
+  // /\s+/), trim each token, take the first that names a real role. A tab-separated
+  // `role="foo\tmain"` is one token to Playwright and names no role; splitting on /\s+/
+  // here would claim a landmark the role engine does not see.
+  function explicitRoleOf(el: Element): string | null {
+    for (const raw of (el.getAttribute('role') ?? '').split(' ')) {
+      const token = raw.trim();
+      if (VALID_ARIA_ROLES.has(token)) return token;
+    }
+    return null;
+  }
+
+  function implicitLandmarkOf(el: Element): string | null {
+    const sectioned = SECTIONED_LANDMARK[el.tagName];
+    if (sectioned) return el.closest(ANCESTOR_PREVENTING_LANDMARK) ? null : sectioned;
+    return IMPLICIT_LANDMARK[el.tagName] ?? null;
+  }
+
+  // Playwright's `computeAriaRole`, narrowed to the landmark question. Only the landmark
+  // subset of implicit roles is modelled, because a non-landmark answer and `null` are the
+  // same answer to the caller: keep walking up.
+  function landmarkRoleOf(el: Element): string | null {
+    const explicit = explicitRoleOf(el);
+    if (!explicit) return implicitLandmarkOf(el);
+    if (explicit === 'none' || explicit === 'presentation') {
+      // Presentational-role-conflict resolution: `role="presentation"` is discarded, and
+      // the implicit role reinstated, when the element carries a global aria-* attribute
+      // or a tabindex. `hasTabIndex` is Playwright's own numeric test, so `tabindex="-1"`
+      // and even `tabindex=""` (Number('') === 0) both count, while `tabindex="soon"` does
+      // not. Playwright's `isFocusable` also admits natively-focusable tags, but none of
+      // those (button/details/select/textarea/a[href]/area[href]/input) has a landmark as
+      // its implicit role, so that arm can never change a landmark answer.
+      const conflicted = GLOBAL_ARIA_ATTRIBUTES.some((a) => el.hasAttribute(a))
+        || !Number.isNaN(Number(String(el.getAttribute('tabindex'))));
+      return conflicted ? implicitLandmarkOf(el) : null;
+    }
+    return explicit;
+  }
+
   function landmarkOf(el: Element): string | null {
-    let node: Element | null = el.parentElement;
-    while (node) {
-      const explicit = node.getAttribute('role');
-      if (explicit) {
-        // An explicit role always wins over the tag's implicit one -- measured: a
-        // `<nav role="presentation">` is not a navigation landmark to Playwright, and a
-        // `<footer role="contentinfo">` inside an `<article>` still is one.
-        if (LANDMARK_ROLES.includes(explicit)) return explicit;
-      } else {
-        const implicit = LANDMARKS[node.tagName];
-        if (implicit && !(SECTIONED_LANDMARKS[node.tagName] && node.parentElement?.closest(SECTIONING))) {
-          return implicit;
-        }
-      }
-      node = node.parentElement;
+    for (let node = el.parentElement; node; node = node.parentElement) {
+      const role = landmarkRoleOf(node);
+      if (!role || !LANDMARK_ROLES.includes(role)) continue;
+      // `getByRole` only matches elements in the accessibility tree, so a landmark hidden
+      // by `aria-hidden` is not addressable and scoping to it would find nothing. Skip it
+      // and keep climbing: an outer landmark above the hidden subtree is still addressable,
+      // and `getByTestId`/`getByText` under it will still reach the element.
+      if (node.closest('[aria-hidden="true"]')) continue;
+      return role;
     }
     return null;
   }
