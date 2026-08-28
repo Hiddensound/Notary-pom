@@ -31,23 +31,38 @@ async function verify(
   sc: ScopedCandidate,
   expected: ElementHandle<SVGElement | HTMLElement> | null,
 ): Promise<Verification> {
-  const locator = bindCandidate(page, sc);
-  const matchCount = await locator.count();
-  if (matchCount === 0) return { ok: false, matchCount, reason: 'notFound' };
-  if (matchCount > 1) return { ok: false, matchCount, reason: 'ambiguous' };
-  const visible = await locator.first().isVisible();
-  if (!visible) return { ok: false, matchCount, reason: 'hidden' };
-
-  if (!expected) return { ok: false, matchCount, reason: 'identity' };
-  const actual = await locator.first().elementHandle();
-  if (!actual) return { ok: false, matchCount, reason: 'identity' };
   try {
-    // Compare in-page: two handles to the same node are distinct JS objects here, so
-    // identity has to be decided where the nodes themselves live.
-    const same = await expected.evaluate((node, other) => node === other, actual);
-    return same ? { ok: true } : { ok: false, matchCount, reason: 'identity' };
-  } finally {
-    await actual.dispose();
+    const locator = bindCandidate(page, sc);
+    const matchCount = await locator.count();
+    if (matchCount === 0) return { ok: false, matchCount, reason: 'notFound' };
+    if (matchCount > 1) return { ok: false, matchCount, reason: 'ambiguous' };
+    const visible = await locator.first().isVisible();
+    if (!visible) return { ok: false, matchCount, reason: 'hidden' };
+
+    if (!expected) return { ok: false, matchCount, reason: 'identity' };
+    const actual = await locator.first().elementHandle();
+    if (!actual) return { ok: false, matchCount, reason: 'identity' };
+    try {
+      // Compare in-page: two handles to the same node are distinct JS objects here, so
+      // identity has to be decided where the nodes themselves live.
+      const same = await expected.evaluate((node, other) => node === other, actual);
+      return same ? { ok: true } : { ok: false, matchCount, reason: 'identity' };
+    } finally {
+      await actual.dispose();
+    }
+  } catch {
+    // Every call above can throw -- a selector Playwright refuses to parse, a node that
+    // detaches mid-check, a page that navigates or closes underneath us. Uncaught, one
+    // such failure aborted the crawl of every remaining element on every remaining page,
+    // which is a wildly disproportionate response to one bad candidate and inconsistent
+    // with the deliberate fail-closed handling of `page.$(record.domPath)` in the caller.
+    // A candidate whose check could not be run is unverifiable, which is exactly what the
+    // rejection list already means. `matchCount` is 0 because nothing was counted: the
+    // failure may have happened before `count()` ever returned.
+    //
+    // Handles are still released: the inner `finally` runs before this catch, and the
+    // caller's `finally` disposes `expected` whatever happens here.
+    return { ok: false, matchCount: 0, reason: 'error' };
   }
 }
 

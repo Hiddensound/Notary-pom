@@ -47,10 +47,14 @@ export interface ScopedCandidate {
 // the harvester observed -- or that the observed node could not be re-found at all, so
 // the match could not be confirmed either way. Both are unverifiable, and an
 // unverifiable element is omitted from generated code rather than emitted hopefully.
+//
+// `error` means the check itself could not be run: Playwright refused the selector, or
+// the page went away mid-check. Unverifiable for a third reason, and rejected the same
+// way -- a per-candidate failure must not be allowed to abort the crawl.
 export interface RejectedCandidate {
   scoped: ScopedCandidate;
   matchCount: number;
-  reason: 'ambiguous' | 'notFound' | 'hidden' | 'identity';
+  reason: 'ambiguous' | 'notFound' | 'hidden' | 'identity' | 'error';
 }
 
 export type ElementStatus = 'resolved' | 'unresolved';

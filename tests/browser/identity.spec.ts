@@ -102,3 +102,37 @@ test('a domPath that is not a parsable selector fails closed instead of aborting
   expect(elements[0].status).toBe('unresolved');
   expect(elements[0].rejected.some((r) => r.reason === 'identity')).toBe(true);
 });
+
+// `page.$(record.domPath)` already fails closed. `count()`, `isVisible()`,
+// `elementHandle()` and the in-page identity comparison did not: one throw took down the
+// crawl of every remaining element on every remaining page. The blast radius of a
+// per-candidate failure has to be that candidate.
+test('a candidate Playwright cannot evaluate rejects the candidate, not the crawl', async ({ page }) => {
+  await page.setContent(
+    '<main><button data-testid="ok">Fine</button><button data-testid="bad">Boom</button></main>');
+  const records = await harvest(page, 'data-testid');
+  // Strip the poisoned record down to its css fallback, then make that fallback
+  // unparsable. Every other record is untouched and must still resolve.
+  const doctored = records.map((r) => (r.testId === 'bad'
+    ? { ...r, testId: null, accessibleName: null, role: null, text: null, tag: 'button:::[' }
+    : r));
+  const { elements } = await resolveElements(page, doctored, '/p', 'data-testid');
+
+  const healthy = elements.find((e) => e.observed.testId === 'ok')!;
+  expect(healthy.status, 'a sibling failure must not cost a good element').toBe('resolved');
+
+  const poisoned = elements.find((e) => e.observed.tag === 'button:::[')!;
+  expect(poisoned.status).toBe('unresolved');
+  expect(poisoned.rejected.some((r) => r.reason === 'error')).toBe(true);
+});
+
+test('a page that dies mid-resolve leaves elements unresolved instead of aborting', async ({ page }) => {
+  await page.setContent('<main><button data-testid="cta">Buy</button></main>');
+  const records = await harvest(page, 'data-testid');
+  await page.close();
+  const { elements } = await resolveElements(page, records, '/p', 'data-testid');
+  expect(elements).toHaveLength(1);
+  expect(elements[0].status).toBe('unresolved');
+  expect(elements[0].rejected.length).toBeGreaterThan(0);
+  expect(elements[0].rejected.every((r) => r.reason === 'error')).toBe(true);
+});

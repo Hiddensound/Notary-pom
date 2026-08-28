@@ -25,23 +25,23 @@ describe('buildCandidates', () => {
   });
 
   it('marks the css fallback fragile and places it last', () => {
-    const c = buildCandidates(rec({ testId: 'cta' }));
+    const c = buildCandidates(rec({ testId: 'cta' }), 'data-testid');
     expect(c.at(-1)!.candidate.strategy).toBe('css');
     expect(c.at(-1)!.fragile).toBe(true);
   });
 
   it('omits text candidates for non-heading kinds', () => {
-    const c = buildCandidates(rec({ text: 'Hello', kind: 'interactive' }));
+    const c = buildCandidates(rec({ text: 'Hello', kind: 'interactive' }), 'data-testid');
     expect(c.some((x) => x.candidate.strategy === 'text')).toBe(false);
   });
 
   it('allows text candidates for headings', () => {
-    const c = buildCandidates(rec({ role: 'heading', text: 'Our Range', kind: 'heading' }));
+    const c = buildCandidates(rec({ role: 'heading', text: 'Our Range', kind: 'heading' }), 'data-testid');
     expect(c.some((x) => x.candidate.strategy === 'text')).toBe(true);
   });
 
   it('never emits a role candidate without an accessible name', () => {
-    const c = buildCandidates(rec({ domId: 'x' }));
+    const c = buildCandidates(rec({ domId: 'x' }), 'data-testid');
     expect(c.some((x) => x.candidate.strategy === 'role')).toBe(false);
   });
 
@@ -49,11 +49,11 @@ describe('buildCandidates', () => {
     const sibling1 = buildCandidates(rec({
       domPath: 'body > main:nth-child(1) > button:nth-child(1)',
       tag: 'button',
-    }));
+    }), 'data-testid');
     const sibling2 = buildCandidates(rec({
       domPath: 'body > main:nth-child(1) > button:nth-child(2)',
       tag: 'button',
-    }));
+    }), 'data-testid');
 
     const css1 = sibling1.at(-1)!.candidate;
     const css2 = sibling2.at(-1)!.candidate;
@@ -95,6 +95,20 @@ describe('renderCandidate', () => {
     // `getByTestId` would resolve against whatever the *consumer* project configured.
     // An attribute selector says what it means and is right in any project.
     expect(renderCandidate(sc)).toBe('this.page.locator(\'[data-qa="cta"]\')');
+  });
+
+  it('serializes the CSS attribute selector layer by CSSOM rules', () => {
+    // Asserted against literal expected text rather than against `testIdSelector`'s own
+    // output, so a regression in the CSS layer cannot hide behind both sides agreeing.
+    const sel = (value: string) =>
+      testIdSelector({ strategy: 'testId' as const, value, attribute: 'data-qa' });
+    expect(sel('plain')).toBe('[data-qa="plain"]');
+    expect(sel('a"b')).toBe('[data-qa="a\\"b"]');
+    expect(sel('a\\b')).toBe('[data-qa="a\\\\b"]');
+    expect(sel(']x[')).toBe('[data-qa="]x["]');
+    expect(sel('a\nb')).toBe('[data-qa="a\\a b"]');
+    expect(sel('a\u0001b')).toBe('[data-qa="a\\1 b"]');
+    expect(sel('a\u007fb')).toBe('[data-qa="a\\7f b"]');
   });
 
   it('survives the CSS and TypeScript escaping layers stacked on each other', () => {
