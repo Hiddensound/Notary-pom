@@ -103,6 +103,29 @@ test('a domPath that is not a parsable selector fails closed instead of aborting
   expect(elements[0].rejected.some((r) => r.reason === 'identity')).toBe(true);
 });
 
+// The landmark is not decoration: it is the only retry the resolver has for an ambiguous
+// candidate. A `<nav>` carrying a role attribute that names no valid ARIA role is still a
+// navigation landmark to Playwright, and treating it as none costs a resolvable element
+// outright -- the ambiguity is never narrowed and the element is dropped from the
+// generated class. This is the recall half of the landmark agreement matrix, measured
+// where it is actually paid.
+test('an ambiguous element in a landmark with an unrecognised role is still recovered', async ({ page }) => {
+  // Two `Cart` links, so the role candidate is ambiguous for both. The nav also holds a
+  // sibling link, so the positional css fallback is ambiguous there too -- the landmark
+  // re-scope is the only route left to a locator.
+  await page.setContent(`<nav role="site-nav"><a href="/shop">Shop</a><a href="/cart">Cart</a></nav>
+    <footer><a href="/cart">Cart</a></footer>`);
+  const { elements } = await resolveElements(page, await harvest(page, 'data-testid'), '/p', 'data-testid');
+  expect(elements).toHaveLength(3);
+  expect(elements.filter((e) => e.status === 'resolved')).toHaveLength(3);
+  await assertBindsObservedNode(page, elements);
+
+  const carts = elements.filter((e) => e.observed.text === 'Cart');
+  expect(carts).toHaveLength(2);
+  expect(carts.map((e) => e.locator!.scope).sort()).toEqual(['contentinfo', 'navigation']);
+  expect(carts.every((e) => !e.locator!.fragile)).toBe(true);
+});
+
 // `page.$(record.domPath)` already fails closed. `count()`, `isVisible()`,
 // `elementHandle()` and the in-page identity comparison did not: one throw took down the
 // crawl of every remaining element on every remaining page. The blast radius of a
