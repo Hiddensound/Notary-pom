@@ -81,8 +81,10 @@ async function adjudicate(page: Page, record: ElementRecord): Promise<Verdict> {
       // the scoped variant matches either that same wrong node or nothing. It cannot
       // reach the right one, because the right one did not match unscoped in the first
       // place. Retrying would cost two extra round-trips per rejection and recover
-      // nothing (confirmed empirically: a build with the identity retry enabled produced
-      // a byte-identical notebook on the reference site).
+      // nothing. Confirmed empirically: a build with the identity retry enabled, crawled
+      // against the reference site, produced an identical winner and status for all 123
+      // elements -- its only effect on the notebook was two extra `rejected` entries
+      // recording the wasted attempts (139 -> 141).
       if (first.reason === 'ambiguous' && record.landmark) {
         const scoped = scopeTo(sc, record.landmark);
         const second = await verify(page, scoped, expected);
