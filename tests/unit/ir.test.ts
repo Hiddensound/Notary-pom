@@ -175,7 +175,7 @@ describe('buildNotebook', () => {
     });
     const nb = buildNotebook('https://s.test', [page('/z'), page('/a')], '2026-01-01T00:00:00Z');
     expect(nb.pages.map((p) => p.routeTemplate)).toEqual(['/a', '/z']);
-    expect(nb.version).toBe('1');
+    expect(nb.version).toBe('2');
   });
 
   it('gives two routes that reduce to one class name distinct class names', () => {

@@ -51,7 +51,11 @@ async function verify(
   }
 }
 
-async function adjudicate(page: Page, record: ElementRecord): Promise<Verdict> {
+async function adjudicate(
+  page: Page,
+  record: ElementRecord,
+  testIdAttribute: string,
+): Promise<Verdict> {
   const rejected: RejectedCandidate[] = [];
 
   // `domPath` is already a valid CSS selector for the observed node, so the node can be
@@ -66,7 +70,7 @@ async function adjudicate(page: Page, record: ElementRecord): Promise<Verdict> {
   }
 
   try {
-    for (const sc of buildCandidates(record)) {
+    for (const sc of buildCandidates(record, testIdAttribute)) {
       const first = await verify(page, sc, expected);
       if (first.ok) return { winner: sc, rejected };
       rejected.push({ scoped: sc, matchCount: first.matchCount, reason: first.reason });
@@ -109,8 +113,9 @@ export async function resolveElements(
   page: Page,
   records: ElementRecord[],
   routeTemplate: string,
+  testIdAttribute = 'data-testid',
 ): Promise<ResolveResult> {
-  const { collections, consumed } = detectCollections(records);
+  const { collections, consumed } = detectCollections(records, testIdAttribute);
   const kept = records.filter((r) => !consumed.has(r.domPath));
 
   const named = resolveCollisions(
@@ -120,7 +125,7 @@ export async function resolveElements(
   const out: IRElement[] = [];
 
   for (const entry of named) {
-    const { winner, rejected } = await adjudicate(page, entry.record);
+    const { winner, rejected } = await adjudicate(page, entry.record, testIdAttribute);
     out.push({
       id: fingerprintElement(routeTemplate, entry.record),
       name: entry.name,

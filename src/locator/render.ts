@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { ScopedCandidate } from '../types.js';
+import { testIdSelector, usesDefaultTestIdAttribute } from './testId.js';
 
 // Exported because page-level interpolations (route, representativeUrl, test titles) go
 // into single-quoted literals in the emitted source too, and an unescaped apostrophe in a
@@ -20,7 +21,15 @@ export const q = (s: string) => {
 
 export function renderCall(c: ScopedCandidate['candidate']): string {
   switch (c.strategy) {
-    case 'testId': return `getByTestId(${q(c.value)})`;
+    // `getByTestId` in the emitted file resolves against the CONSUMER project's configured
+    // test-id attribute, which POMBuilder has no way to know. It is therefore only correct
+    // when the attribute is Playwright's own default; for anything else the attribute has
+    // to be named in the locator, or the shipped getter binds a different node than the one
+    // the resolver verified. Two escaping layers here: `testIdSelector` produces a CSS
+    // string, `q` puts it inside a TypeScript string literal.
+    case 'testId': return usesDefaultTestIdAttribute(c)
+      ? `getByTestId(${q(c.value)})`
+      : `locator(${q(testIdSelector(c))})`;
     case 'role': return `getByRole(${q(c.role)}, { name: ${q(c.name)}, exact: ${c.exact} })`;
     case 'label': return `getByLabel(${q(c.value)}, { exact: ${c.exact} })`;
     case 'placeholder': return `getByPlaceholder(${q(c.value)})`;

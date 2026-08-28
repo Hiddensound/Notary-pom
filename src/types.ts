@@ -24,7 +24,11 @@ export interface ElementRecord {
 }
 
 export type LocatorCandidate =
-  | { strategy: 'testId'; value: string }
+  // `attribute` is the DOM attribute `value` was read from. It travels on the candidate
+  // so that binding and emission both derive from it, rather than from Playwright's
+  // process-global test-id attribute -- which POMBuilder does not set and the consumer
+  // project may have set to anything.
+  | { strategy: 'testId'; value: string; attribute: string }
   | { strategy: 'role'; role: string; name: string; exact: boolean }
   | { strategy: 'label'; value: string; exact: boolean }
   | { strategy: 'placeholder'; value: string }
@@ -84,7 +88,7 @@ export interface PageIR {
 }
 
 export interface Notebook {
-  version: '1';
+  version: '2';
   site: string;
   generatedAt: string;
   pages: PageIR[];

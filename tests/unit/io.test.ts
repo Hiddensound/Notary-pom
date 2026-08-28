@@ -7,7 +7,7 @@ import { readNotebook, writeNotebook } from '../../src/io/notebookStore.js';
 import type { Notebook } from '../../src/types.js';
 
 const nb: Notebook = {
-  version: '1', site: 'https://s.test', generatedAt: '2026-01-01T00:00:00Z',
+  version: '2', site: 'https://s.test', generatedAt: '2026-01-01T00:00:00Z',
   pages: [{
     routeTemplate: '/', representativeUrl: 'https://s.test/', sampleUrls: [],
     className: 'HomePage', pageFingerprint: 'pg_a', collections: [],
@@ -80,6 +80,22 @@ describe('notebookStore', () => {
     expect(await readNotebook(dir)).toBeNull();
     await writeNotebook(dir, nb);
     expect((await readNotebook(dir))!.pages[0].className).toBe('HomePage');
+  });
+
+  it('refuses a notebook from before locators were verified for identity', async () => {
+    // `generate` emits from the stored notebook without re-resolving, so a version-1
+    // notebook would emit getters whose `resolved` only ever meant "unique". There is no
+    // migration: the missing evidence can only come from a fresh crawl.
+    await writeNotebook(dir, nb);
+    await writeFile(join(dir, 'notebook.json'), JSON.stringify({ ...nb, version: '1' }, null, 2) + '\n');
+    await expect(readNotebook(dir)).rejects.toThrow(/pombuilder crawl/);
+    await expect(readNotebook(dir)).rejects.toThrow(/version 1/);
+  });
+
+  it('refuses a notebook whose version it does not recognise at all', async () => {
+    await writeNotebook(dir, nb);
+    await writeFile(join(dir, 'notebook.json'), JSON.stringify({ ...nb, version: '99' }, null, 2) + '\n');
+    await expect(readNotebook(dir)).rejects.toThrow(/pombuilder crawl/);
   });
 
   it('writes stable json so git diffs are meaningful', async () => {

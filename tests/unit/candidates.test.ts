@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { buildCandidates, scopeTo, parentPath } from '../../src/locator/candidates.js';
 import { renderCandidate } from '../../src/locator/render.js';
+import { testIdSelector } from '../../src/locator/testId.js';
 import type { ElementRecord } from '../../src/types.js';
 
 const rec = (over: Partial<ElementRecord>): ElementRecord => ({
@@ -12,8 +13,15 @@ const rec = (over: Partial<ElementRecord>): ElementRecord => ({
 
 describe('buildCandidates', () => {
   it('puts testId first and role second', () => {
-    const c = buildCandidates(rec({ testId: 'cta', accessibleName: 'Buy' }));
+    const c = buildCandidates(rec({ testId: 'cta', accessibleName: 'Buy' }), 'data-testid');
     expect(c.map((x) => x.candidate.strategy).slice(0, 2)).toEqual(['testId', 'role']);
+  });
+
+  it('records the attribute the test id was read from on the candidate itself', () => {
+    // Carried on the candidate rather than looked up from process-global state, so what
+    // the resolver verifies and what the emitter renders cannot drift apart.
+    const c = buildCandidates(rec({ testId: 'cta' }), 'data-qa');
+    expect(c[0].candidate).toEqual({ strategy: 'testId', value: 'cta', attribute: 'data-qa' });
   });
 
   it('marks the css fallback fragile and places it last', () => {
@@ -69,6 +77,40 @@ describe('renderCandidate', () => {
   it('renders testId', () => {
     const sc = { scope: null, fragile: false, candidate: { strategy: 'testId' as const, value: 'cta' } };
     expect(renderCandidate(sc)).toBe("this.page.getByTestId('cta')");
+  });
+
+  it('renders the default attribute as getByTestId, so existing output is byte-identical', () => {
+    const sc = {
+      scope: null, fragile: false,
+      candidate: { strategy: 'testId' as const, value: 'cta', attribute: 'data-testid' },
+    };
+    expect(renderCandidate(sc)).toBe("this.page.getByTestId('cta')");
+  });
+
+  it('renders a non-default attribute as an explicit attribute selector', () => {
+    const sc = {
+      scope: null, fragile: false,
+      candidate: { strategy: 'testId' as const, value: 'cta', attribute: 'data-qa' },
+    };
+    // `getByTestId` would resolve against whatever the *consumer* project configured.
+    // An attribute selector says what it means and is right in any project.
+    expect(renderCandidate(sc)).toBe('this.page.locator(\'[data-qa="cta"]\')');
+  });
+
+  it('survives the CSS and TypeScript escaping layers stacked on each other', () => {
+    const value = 'a"b\\c\']d\ne\u2028f\u0001g${x}`h';
+    const sc = {
+      scope: null, fragile: false,
+      candidate: { strategy: 'testId' as const, value, attribute: 'data-qa' },
+    };
+    const out = renderCandidate(sc);
+    expect(out).not.toMatch(/[\n\r\u2028\u2029]/);
+    const prefix = 'this.page.locator(';
+    expect(out.startsWith(prefix) && out.endsWith(')')).toBe(true);
+    // Evaluate the emitted TypeScript string literal. What it yields must be exactly the
+    // CSS selector the resolver bound with -- one escaping layer must not eat the other.
+    const literal = new Function(`return ${out.slice(prefix.length, -1)};`)() as string;
+    expect(literal).toBe(testIdSelector(sc.candidate));
   });
 
   it('renders an exact role locator', () => {

@@ -9,10 +9,13 @@ export function parentPath(domPath: string): string {
   return domPath.split(' > ').slice(0, -1).join(' > ');
 }
 
-export function buildCandidates(r: ElementRecord): ScopedCandidate[] {
+// `testIdAttribute` is threaded in from the crawl config rather than read from a module
+// global, so a second crawl in the same process with a different attribute cannot change
+// what this one produces.
+export function buildCandidates(r: ElementRecord, testIdAttribute: string): ScopedCandidate[] {
   const out: ScopedCandidate[] = [];
 
-  if (r.testId) out.push(unscoped({ strategy: 'testId', value: r.testId }));
+  if (r.testId) out.push(unscoped({ strategy: 'testId', value: r.testId, attribute: testIdAttribute }));
 
   if (r.role && r.accessibleName) {
     out.push(unscoped({ strategy: 'role', role: r.role, name: r.accessibleName, exact: true }));

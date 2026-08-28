@@ -8,10 +8,14 @@ import { compareStrings } from '../util/order.js';
 
 const MIN_SIBLINGS = 3;
 
-function itemCandidate(group: ElementRecord[]): ScopedCandidate {
+function itemCandidate(group: ElementRecord[], testIdAttribute: string): ScopedCandidate {
   const testIds = new Set(group.map((r) => r.testId));
   if (testIds.size === 1 && group[0].testId) {
-    return { scope: null, fragile: false, candidate: { strategy: 'testId', value: group[0].testId } };
+    return {
+      scope: null,
+      fragile: false,
+      candidate: { strategy: 'testId', value: group[0].testId, attribute: testIdAttribute },
+    };
   }
   const container = parentPath(group[0].domPath);
   const tag = group[0].tag;
@@ -27,6 +31,7 @@ function collectionName(group: ElementRecord[]): string {
 
 export function detectCollections(
   records: ElementRecord[],
+  testIdAttribute = 'data-testid',
   minSiblings = MIN_SIBLINGS,
 ): { collections: IRCollection[]; consumed: Set<string> } {
   const groups = new Map<string, ElementRecord[]>();
@@ -44,7 +49,7 @@ export function detectCollections(
     collections.push({
       id: 'co_' + createHash('sha256').update(key).digest('hex').slice(0, 12),
       name: collectionName(sorted),
-      item: itemCandidate(sorted),
+      item: itemCandidate(sorted, testIdAttribute),
       count: sorted.length,
     });
     for (const r of sorted) consumed.add(r.domPath);

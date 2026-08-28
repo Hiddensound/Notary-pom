@@ -3,6 +3,7 @@
 import type { IRCollection, IRElement, Notebook, PageIR, RouteGroup } from '../types.js';
 import { classNameForRoute, uniqueClassNames } from './fingerprint.js';
 import { resolveMemberNames } from '../name/members.js';
+import { NOTEBOOK_VERSION } from '../io/notebookStore.js';
 import { compareStrings } from '../util/order.js';
 
 export function buildPageIR(args: {
@@ -29,7 +30,7 @@ export function buildNotebook(site: string, pages: PageIR[], now: string): Noteb
   // here -- `buildPageIR` sees one page and cannot know what the others reduced to.
   const classNames = uniqueClassNames(pages);
   return {
-    version: '1',
+    version: NOTEBOOK_VERSION,
     site,
     generatedAt: now,
     pages: pages

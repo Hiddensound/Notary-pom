@@ -10,7 +10,7 @@ const el = (id: string, over: Partial<IRElement> = {}): IRElement => ({
 });
 
 const nb = (pages: PageIR[]): Notebook =>
-  ({ version: '1', site: 'https://s.test', generatedAt: 'now', pages });
+  ({ version: '2', site: 'https://s.test', generatedAt: 'now', pages });
 
 const pg = (elements: IRElement[]): PageIR => ({
   routeTemplate: '/p', representativeUrl: 'https://s.test/p', sampleUrls: [],

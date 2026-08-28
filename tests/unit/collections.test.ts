@@ -15,7 +15,8 @@ describe('detectCollections', () => {
     const { collections, consumed } = detectCollections([card(1), card(2), card(3)]);
     expect(collections).toHaveLength(1);
     expect(collections[0].count).toBe(3);
-    expect(collections[0].item.candidate).toEqual({ strategy: 'testId', value: 'product-card' });
+    expect(collections[0].item.candidate)
+      .toEqual({ strategy: 'testId', value: 'product-card', attribute: 'data-testid' });
     expect(consumed.size).toBe(3);
   });
 

@@ -188,7 +188,8 @@ export async function crawlSite(
 
       const snapshot = await page.locator('body').ariaSnapshot();
       const records = await harvest(page, config.testIdAttribute);
-      const { elements, collections } = await resolveElements(page, records, group.routeTemplate);
+      const { elements, collections } = await resolveElements(
+        page, records, group.routeTemplate, config.testIdAttribute);
 
       pages.push(buildPageIR({
         group,
