@@ -39,10 +39,14 @@ export interface ScopedCandidate {
   fragile: boolean;
 }
 
+// `identity` means the candidate matched exactly one visible node that is not the node
+// the harvester observed -- or that the observed node could not be re-found at all, so
+// the match could not be confirmed either way. Both are unverifiable, and an
+// unverifiable element is omitted from generated code rather than emitted hopefully.
 export interface RejectedCandidate {
   scoped: ScopedCandidate;
   matchCount: number;
-  reason: 'ambiguous' | 'notFound' | 'hidden';
+  reason: 'ambiguous' | 'notFound' | 'hidden' | 'identity';
 }
 
 export type ElementStatus = 'resolved' | 'unresolved';

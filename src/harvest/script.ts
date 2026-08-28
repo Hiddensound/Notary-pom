@@ -8,6 +8,22 @@ export function harvestInPage(testIdAttribute: string): ElementRecord[] {
   const LANDMARKS: Record<string, string> = {
     HEADER: 'banner', NAV: 'navigation', MAIN: 'main', FOOTER: 'contentinfo', ASIDE: 'complementary',
   };
+  const LANDMARK_ROLES = ['banner', 'navigation', 'main', 'contentinfo', 'complementary', 'search'];
+
+  // Measured against the installed Playwright (1.62.1), not recalled from the ARIA spec:
+  // `<header>`/`<footer>` are banner/contentinfo only when they are NOT inside sectioning
+  // content, where "sectioning content" is an article/aside/main/nav/section element or an
+  // element whose explicit role is article/complementary/main/navigation/region. A plain
+  // `<div>`, or one with `role="generic"`/`"group"`/`"presentation"`, does not scope them.
+  // `<aside>`, `<nav>` and `<main>` are landmarks unconditionally on this version --
+  // Playwright does not implement the newer "a nested `<aside>` needs an accessible name"
+  // rule -- so only header and footer are listed here. The invariant this function owes is
+  // agreement with Playwright's role engine, because that engine is what `getByRole`
+  // re-scoping binds against; a disagreement makes the resolver narrow to a landmark the
+  // element is not in and bind somebody else's element.
+  const SECTIONED_LANDMARKS: Record<string, boolean> = { HEADER: true, FOOTER: true };
+  const SECTIONING = 'article,aside,main,nav,section,'
+    + '[role=article],[role=complementary],[role=main],[role=navigation],[role=region]';
 
   const IMPLICIT_ROLE: Record<string, string> = {
     A: 'link', BUTTON: 'button', SELECT: 'combobox', TEXTAREA: 'textbox',
@@ -73,10 +89,17 @@ export function harvestInPage(testIdAttribute: string): ElementRecord[] {
     let node: Element | null = el.parentElement;
     while (node) {
       const explicit = node.getAttribute('role');
-      if (explicit && ['banner', 'navigation', 'main', 'contentinfo', 'complementary', 'search'].includes(explicit)) {
-        return explicit;
+      if (explicit) {
+        // An explicit role always wins over the tag's implicit one -- measured: a
+        // `<nav role="presentation">` is not a navigation landmark to Playwright, and a
+        // `<footer role="contentinfo">` inside an `<article>` still is one.
+        if (LANDMARK_ROLES.includes(explicit)) return explicit;
+      } else {
+        const implicit = LANDMARKS[node.tagName];
+        if (implicit && !(SECTIONED_LANDMARKS[node.tagName] && node.parentElement?.closest(SECTIONING))) {
+          return implicit;
+        }
       }
-      if (LANDMARKS[node.tagName]) return LANDMARKS[node.tagName];
       node = node.parentElement;
     }
     return null;

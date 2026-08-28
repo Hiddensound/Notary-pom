@@ -1,7 +1,35 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import type { PageIR } from '../types.js';
+import type { IRElement, PageIR } from '../types.js';
 import { q } from '../locator/render.js';
+
+// `toHaveCount(1)` and `toBeVisible()` are exactly the two conditions `verify()` already
+// proved before the getter was emitted, so on the page it was generated from they pass by
+// construction -- the spec is structurally incapable of catching a getter bound to the
+// wrong element. This block asserts the one property the resolver now guarantees and the
+// count/visibility assertions cannot see: no two getters resolve to the same node.
+//
+// It is deliberately built only from things Playwright itself computes. Nothing here
+// derives from POMBuilder's hand-rolled `accessibleName`/`roleOf` approximations, which
+// are not Playwright's algorithms and would fail on day one if asserted against.
+//
+// `.catch(() => null)` keeps a locator that has drifted to zero (or to a strict-mode
+// violation) from turning into a second, redundant hard failure -- the soft count
+// assertion above has already reported it -- while still comparing identity across every
+// getter that did resolve.
+function distinctnessBlock(resolved: IRElement[]): string[] {
+  if (resolved.length < 2) return [];
+  return [
+    '',
+    '  const locators = [',
+    ...resolved.map((e) => `    p.${e.name},`),
+    '  ];',
+    '  const handles = (await Promise.all(locators.map((l) => l.elementHandle().catch(() => null))))',
+    '    .filter((h): h is NonNullable<typeof h> => h !== null);',
+    '  const distinct = await page.evaluate((hs) => new Set(hs).size, handles);',
+    '  expect.soft(distinct).toBe(handles.length);',
+  ];
+}
 
 export function emitSmoke(page: PageIR): string {
   const resolved = page.elements.filter((e) => e.status === 'resolved' && e.locator);
@@ -20,6 +48,7 @@ export function emitSmoke(page: PageIR): string {
     `  await page.goto(${q(page.representativeUrl)});`,
     `  const p = new ${page.className}(page);`,
     ...assertions,
+    ...distinctnessBlock(resolved),
     '});',
     '',
   ].join('\n');

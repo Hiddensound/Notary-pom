@@ -150,3 +150,37 @@ describe('page-level interpolations are escaped', () => {
     expect(src).toContain("test('O\\'BrienPage locators resolve uniquely'");
   });
 });
+
+// The count-and-visibility assertions are exactly what `verify()` already proved at
+// generation time, so they pass by construction and cannot detect a getter bound to the
+// wrong element. The distinctness assertion is the one invariant the resolver guarantees
+// that the generated spec could not otherwise see.
+describe('emitSmoke asserts that no two getters bind the same element', () => {
+  it('collects every resolved getter and compares node identity in-page', () => {
+    const src = emitSmoke(page);
+    expect(src).toContain('  const locators = [');
+    expect(src).toContain('    p.addToCartButton,');
+    expect(src).toContain('    p.priceText,');
+    expect(src).toContain(
+      '  const handles = (await Promise.all(locators.map((l) => l.elementHandle().catch(() => null))))',
+    );
+    expect(src).toContain('    .filter((h): h is NonNullable<typeof h> => h !== null);');
+    expect(src).toContain('  const distinct = await page.evaluate((hs) => new Set(hs).size, handles);');
+    expect(src).toContain('  expect.soft(distinct).toBe(handles.length);');
+  });
+
+  it('never lists an unresolved getter', () => {
+    expect(emitSmoke(page)).not.toContain('p.mysteryButton');
+  });
+
+  it('emits nothing extra when the page has fewer than two resolved elements', () => {
+    const lone: PageIR = { ...page, elements: [page.elements[0]], collections: [] };
+    const src = emitSmoke(lone);
+    expect(src).not.toContain('const locators = [');
+    expect(src).not.toContain('distinct');
+  });
+
+  it('is byte-identical across reruns', () => {
+    expect(emitSmoke(page)).toBe(emitSmoke(page));
+  });
+});
