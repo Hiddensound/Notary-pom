@@ -87,6 +87,49 @@ test('settle waits for a fetch issued after the document has already gone networ
 });
 
 // ---------------------------------------------------------------------------
+// The mutation observer's positive path: wait out a DOM mutation stream that involves
+// no network traffic at all.
+//
+// `browser.spec.ts:8` used to be the only test covering this. It still passes, but it
+// stopped *discriminating* the moment the network-idle wait went in front of it: its
+// mutation stream finishes at ~200ms and the network-idle wait alone runs ~500ms, so its
+// assertions are satisfied before the observer does anything (review A-3, which measured
+// it passing against a `settle` with the whole mutation phase deleted). Nothing else in
+// the repo failed if that phase regressed.
+//
+// This fixture mutates for 1500ms -- three times the network-idle window -- with no
+// requests whatsoever, so only the observer can get to the end of it. Nothing in
+// `browser.spec.ts` was changed to achieve that; the coverage is added, not moved.
+// ---------------------------------------------------------------------------
+
+test('settle waits out a mutation stream that outlasts the network-idle wait and makes no requests', async ({ page }) => {
+  await page.route('**/*', (route) => route.fulfill({
+    contentType: 'text/html',
+    body: `<!DOCTYPE html><html><body><main><h1>Growing</h1><ul id="a"></ul></main><script>
+      var n = 0;
+      var t = setInterval(function(){
+        n += 1;
+        document.getElementById('a').innerHTML += '<li data-testid="row-' + n + '">row ' + n + '</li>';
+        if (n === 15) clearInterval(t);
+      }, 100);
+    </script></body></html>`,
+  }));
+  await page.goto('https://growing.test/', { waitUntil: 'domcontentloaded' });
+
+  const start = Date.now();
+  const result = await settle(page);
+  const elapsed = Date.now() - start;
+
+  // The whole stream must be on the page: 15 rows, not the 5-ish a wait that gave up
+  // after the network-idle window would have seen.
+  expect(await page.locator('[data-testid^="row-"]').count()).toBe(15);
+  // And it must have taken longer than the stream, which is the part only the observer
+  // can deliver.
+  expect(elapsed).toBeGreaterThan(1500);
+  expect(result.stable).toBe(true);
+});
+
+// ---------------------------------------------------------------------------
 // (b) Never-quiet page -- the budget path, and it must say so.
 // ---------------------------------------------------------------------------
 
