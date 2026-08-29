@@ -6,7 +6,8 @@ import { Command } from 'commander';
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
 import { withDefaults } from './config.js';
-import { crawlSite } from './crawl/crawl.js';
+import { crawlSite, formatUnstable } from './crawl/crawl.js';
+import type { UnstablePage } from './crawl/crawl.js';
 import { readNotebook, writeNotebook } from './io/notebookStore.js';
 import { writeGenerated } from './io/writeOutput.js';
 import { diffNotebooks, formatDrift } from './diff/notebook.js';
@@ -28,12 +29,16 @@ program.command('crawl').argument('[url]').option('-c, --config <path>')
     const config = await loadConfig(opts.config, url);
     const browser = await chromium.launch();
     try {
-      const nb = await crawlSite(browser, config);
+      const unstable: UnstablePage[] = [];
+      const nb = await crawlSite(browser, config, undefined, (u) => unstable.push(u));
       await writeNotebook(config.irDir, await refineNotebookNames(nb, config));
       const total = nb.pages.reduce((n, p) => n + p.elements.length, 0);
       const unresolved = nb.pages.reduce(
         (n, p) => n + p.elements.filter((e) => e.status === 'unresolved').length, 0);
       console.log(`${nb.pages.length} pages, ${total} elements, ${unresolved} unresolved.`);
+      // A page sampled mid-flight is not recorded as if it were stable: the notebook
+      // cannot say so without a schema change, so the crawl says so out loud instead.
+      if (unstable.length) console.warn(formatUnstable(unstable));
     } finally {
       await browser.close();
     }
@@ -65,8 +70,12 @@ program.command('diff').argument('[url]').option('-c, --config <path>')
     if (!previous) throw new Error('No stored notebook to compare against.');
     const browser = await chromium.launch();
     try {
-      const next = await crawlSite(browser, config);
+      const unstable: UnstablePage[] = [];
+      const next = await crawlSite(browser, config, undefined, (u) => unstable.push(u));
       console.log(formatDrift(diffNotebooks(previous, next)));
+      // Drift reported off an unstable sample is exactly the spurious drift this warning
+      // exists to explain, so it belongs on the diff path as much as on the crawl path.
+      if (unstable.length) console.warn(formatUnstable(unstable));
     } finally {
       await browser.close();
     }

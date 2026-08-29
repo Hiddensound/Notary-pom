@@ -36,7 +36,9 @@ node dist/src/cli.js diff <url> [-c config.js]
   interactive element, heading and label on one representative page per route
   template, and writes the result as a notebook (`<irDir>/notebook.json`, default
   `.pombuilder/notebook.json`). Prints a one-line summary: pages found, elements
-  harvested, elements left unresolved. Nothing under `outDir` is touched.
+  harvested, elements left unresolved. Nothing under `outDir` is touched. If any page
+  had to be sampled before it stopped changing, a warning naming those pages is printed
+  to stderr — see [Pages that never hold still](#pages-that-never-hold-still).
 - **`generate`** — Reads the stored notebook and turns it into TypeScript: one base
   class per page (locators, single-element actions), one subclass per page (yours to
   extend), and one smoke spec per page. Fails if no notebook exists yet — run `crawl`
@@ -47,7 +49,9 @@ node dist/src/cli.js diff <url> [-c config.js]
   stored notebook, without writing anything. Reports pages added or removed and, per
   element, whether it was added, removed, renamed, changed locator strategy, or
   flipped between resolved and unresolved. Use this in CI to catch locator drift
-  before it silently breaks a page object.
+  before it silently breaks a page object. It prints the same unstable-page warning as
+  `crawl`, because that is the first thing to check when a diff looks larger than the
+  change that caused it.
 
 ## Config file
 
@@ -179,6 +183,23 @@ takes no flags of its own — all configuration (seed URL, `irDir`, `maxPages`, 
 is passed per tool call as arguments.
 
 ## Known limitations
+
+### Pages that never hold still
+
+Before harvesting, POMBuilder waits for a page to stop changing: first for the network
+to go idle — which is what makes a single-page app's XHR-delivered content arrive
+before, rather than after, the harvest — and then for a window with no DOM mutation and
+no request outstanding. That whole wait is bounded, and some pages never satisfy it: a
+carousel, a ticker, a polling widget, a CSS animation that churns a class attribute, or
+a page holding a long-lived request open (server-sent events, a long poll).
+
+Such a page is still crawled, but it is sampled at an arbitrary point rather than at a
+settled one, so the elements harvested from it may vary between runs and `diff` may
+report drift for elements that never actually changed. `crawl` and `diff` both name
+those pages on stderr. The notebook itself does not record them: `diff` re-crawls in the
+same process, so the live warning already covers the case the record would have served.
+If a page is listed there, treat that page's diff output with suspicion rather than the
+site.
 
 **Same-page, state-mutating links aren't recognised as such.** The deny-list
 (`src/url/denyList.ts`) only flags destructive-sounding words — sign-out, delete,

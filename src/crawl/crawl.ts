@@ -5,6 +5,7 @@ import robotsParserImport from 'robots-parser';
 import type { Notebook, PageIR, PomBuilderConfig, RouteGroup } from '../types.js';
 import { createContext } from '../browser/context.js';
 import { settle } from '../browser/settle.js';
+import type { SettleReason } from '../browser/settle.js';
 import { LoginRedirectError, looksLikeLogin } from '../browser/guard.js';
 import { harvest } from '../harvest/harvest.js';
 import { resolveElements } from '../resolve/resolve.js';
@@ -39,6 +40,68 @@ const robotsParser = robotsParserImport as unknown as (url: string, robotstxt: s
 
 function matchesAny(pathname: string, patterns: string[]): boolean {
   return patterns.some((p) => new RegExp('^' + p.replace(/\*/g, '.*') + '$').test(pathname));
+}
+
+/**
+ * Which visit of a URL was sampled before the page stabilised.
+ *
+ * - `discover` -- pass 1. The page's links may be incomplete, so routes it would have
+ *   led to may be missing from the crawl entirely.
+ * - `validate` -- the two-sample structural comparison behind a route template. An
+ *   unstable sample makes a *disagreement* untrustworthy; see `validateGroups`.
+ * - `harvest`  -- pass 2, the DOM the generated page object is built from. The most
+ *   consequential of the three: elements may be missing, and `pombuilder diff` will
+ *   report their absence as drift on the next run.
+ */
+export type SettlePhase = 'discover' | 'validate' | 'harvest';
+
+export interface UnstablePage {
+  url: string;
+  phase: SettlePhase;
+  reason: SettleReason;
+  elapsedMs: number;
+}
+
+export type UnstableReporter = (page: UnstablePage) => void;
+
+const WHY: Record<SettleReason, string> = {
+  quiet: 'stabilised',
+  network: 'the network never went idle, so content may still have been arriving',
+  mutation: 'the DOM never stopped changing',
+  budget: 'the settle budget ran out',
+  error: 'the stability check could not be run',
+};
+
+/**
+ * Render the unstable-page report for a human. Shared by the CLI and the MCP server so
+ * both say the same thing; a crawl that sampled a moving page must not look like one
+ * that did not.
+ */
+export function formatUnstable(pages: UnstablePage[]): string {
+  if (pages.length === 0) return '';
+  const lines = pages.map(
+    (p) => `  ${p.url} (${p.phase}, ${p.elapsedMs}ms): ${WHY[p.reason]}.`);
+  return `Warning: ${pages.length} page load${pages.length === 1 ? ' was' : 's were'} sampled `
+    + 'before the page stabilised. The harvest may be incomplete, and `pombuilder diff` may '
+    + 'report drift for elements that never actually changed.\n'
+    + lines.join('\n');
+}
+
+// `settle` returns a result rather than void precisely so exhaustion is not silence. The
+// crawl's reaction is the same at all three call sites -- record it and carry on -- and
+// deliberately so: aborting would throw away a usable partial result over a page the site
+// may simply always animate, and retrying an unstable page just spends the budget twice
+// on a page that by construction is not going to hold still.
+async function settleAt(
+  page: Page,
+  url: string,
+  phase: SettlePhase,
+  report: UnstableReporter | undefined,
+): Promise<void> {
+  const result = await settle(page);
+  if (!result.stable) {
+    report?.({ url, phase, reason: result.reason, elapsedMs: result.elapsedMs });
+  }
 }
 
 // Pass 1's per-link filtering decision, pulled out as a pure function so it is directly
@@ -79,6 +142,7 @@ export async function validateGroups(
   page: Page,
   groups: RouteGroup[],
   config: PomBuilderConfig,
+  report?: UnstableReporter,
 ): Promise<RouteGroup[]> {
   const out: RouteGroup[] = [];
 
@@ -92,7 +156,7 @@ export async function validateGroups(
     const prints: string[] = [];
     for (const url of [first, second]) {
       await page.goto(url, { waitUntil: 'domcontentloaded' });
-      await settle(page);
+      await settleAt(page, url, 'validate', report);
       if (await looksLikeLogin(page, config)) throw new LoginRedirectError(page.url());
       prints.push(structuralFingerprint(await page.locator('body').ariaSnapshot()));
     }
@@ -105,6 +169,13 @@ export async function validateGroups(
     // Structures disagree: the URL shape was a coincidence, not a template. Fall back to
     // one literal route per sample rather than emitting a page object that is right for
     // some of them and quietly wrong for the rest.
+    //
+    // An unstable sample makes a disagreement here untrustworthy -- two fingerprints can
+    // differ because the pages really are different shapes, or because one of them was
+    // photographed mid-render -- but the fallback is still the right answer under that
+    // uncertainty: one page object per sample is never wrong for any of them, whereas
+    // merging on a coincidence is quietly wrong for some. So instability is reported
+    // above and deliberately does not change the decision made here.
     //
     // Two samples can share a pathname -- `scrubUrl` keeps `utm_*`, so `/p?utm_source=nav`
     // and `/p?utm_source=footer` are distinct URLs here -- and the route template is the
@@ -127,6 +198,7 @@ export async function crawlSite(
   browser: Browser,
   config: PomBuilderConfig,
   routeHandler?: (route: Route) => Promise<unknown>,
+  onUnstable?: UnstableReporter,
 ): Promise<Notebook> {
   const context = await createContext(browser, config);
   if (routeHandler) await context.route('**/*', routeHandler);
@@ -153,7 +225,7 @@ export async function crawlSite(
     while (queue.length && discovered.length < config.maxPages) {
       const { url, depth } = queue.shift()!;
       await page.goto(url, { waitUntil: 'domcontentloaded' });
-      await settle(page);
+      await settleAt(page, url, 'discover', onUnstable);
 
       if (await looksLikeLogin(page, config)) {
         throw new LoginRedirectError(page.url());
@@ -177,10 +249,10 @@ export async function crawlSite(
     // ---- pass 2: harvest one representative per route template ----
     const pages: PageIR[] = [];
 
-    const groups = await validateGroups(page, templateRoutes(discovered), config);
+    const groups = await validateGroups(page, templateRoutes(discovered), config, onUnstable);
     for (const group of groups) {
       await page.goto(group.representativeUrl, { waitUntil: 'domcontentloaded' });
-      await settle(page);
+      await settleAt(page, group.representativeUrl, 'harvest', onUnstable);
 
       if (await looksLikeLogin(page, config)) {
         throw new LoginRedirectError(page.url());

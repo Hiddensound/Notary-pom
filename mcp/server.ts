@@ -5,7 +5,8 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import { chromium } from 'playwright';
 import { withDefaults } from '../src/config.js';
-import { crawlSite } from '../src/crawl/crawl.js';
+import { crawlSite, formatUnstable } from '../src/crawl/crawl.js';
+import type { UnstablePage } from '../src/crawl/crawl.js';
 import { readNotebook, writeNotebook } from '../src/io/notebookStore.js';
 import { writeGenerated } from '../src/io/writeOutput.js';
 import { diffNotebooks, formatDrift } from '../src/diff/notebook.js';
@@ -25,11 +26,14 @@ export function buildServer(): McpServer {
       const config = withDefaults({ seed: url, irDir, maxPages });
       const browser = await chromium.launch();
       try {
-        const nb = await crawlSite(browser, config);
+        const unstable: UnstablePage[] = [];
+        const nb = await crawlSite(browser, config, undefined, (u) => unstable.push(u));
         await writeNotebook(config.irDir, await refineNotebookNames(nb, config));
         const unresolved = nb.pages.reduce(
           (n, p) => n + p.elements.filter((e) => e.status === 'unresolved').length, 0);
-        return text(`Crawled ${nb.pages.length} routes. ${unresolved} elements unresolved.`);
+        const warning = unstable.length ? `\n\n${formatUnstable(unstable)}` : '';
+        return text(
+          `Crawled ${nb.pages.length} routes. ${unresolved} elements unresolved.${warning}`);
       } finally {
         await browser.close();
       }
@@ -55,7 +59,10 @@ export function buildServer(): McpServer {
       if (!previous) return text('No stored notebook to compare against.');
       const browser = await chromium.launch();
       try {
-        return text(formatDrift(diffNotebooks(previous, await crawlSite(browser, config))));
+        const unstable: UnstablePage[] = [];
+        const next = await crawlSite(browser, config, undefined, (u) => unstable.push(u));
+        const warning = unstable.length ? `\n\n${formatUnstable(unstable)}` : '';
+        return text(`${formatDrift(diffNotebooks(previous, next))}${warning}`);
       } finally {
         await browser.close();
       }
