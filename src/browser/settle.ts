@@ -5,11 +5,13 @@ import type { Page } from '@playwright/test';
 /**
  * Why `settle` stopped waiting.
  *
- * - `quiet`    -- the DOM was observed unchanged for a full quiet window with no request
- *                 outstanding. This is the only stable outcome.
- * - `network`  -- the page never went network-idle inside its share of the budget, or it
- *                 still had a request in flight after every confirmation round. Content
- *                 may still have been arriving when we stopped looking.
+ * - `quiet`    -- the DOM was observed unchanged, with no request starting and none
+ *                 outstanding, across `MIN_QUIET_WINDOWS` consecutive windows. The only
+ *                 stable outcome.
+ * - `network`  -- the page never went network-idle inside its share of the budget, so
+ *                 nothing could establish that its content had finished arriving.
+ * - `pending`  -- the page did go idle, but requests kept starting or staying outstanding
+ *                 for as long as we watched. Content may still have been arriving.
  * - `mutation` -- the DOM never stopped changing (a carousel, a ticker, a poller, or a
  *                 CSS animation churning a class attribute). The page was sampled at an
  *                 arbitrary point in a mutation stream.
@@ -19,21 +21,40 @@ import type { Page } from '@playwright/test';
  *                 mid-evaluate. Unverifiable for a third reason, and reported as such
  *                 rather than being mistaken for stability.
  */
-export type SettleReason = 'quiet' | 'network' | 'mutation' | 'budget' | 'error';
+export type SettleReason = 'quiet' | 'network' | 'pending' | 'mutation' | 'budget' | 'error';
 
-export interface SettleResult {
-  /** True only for `reason === 'quiet'`. */
-  stable: boolean;
-  reason: SettleReason;
-  elapsedMs: number;
-}
+/** Every reason other than the one stable one. */
+export type UnstableReason = Exclude<SettleReason, 'quiet'>;
 
-// How many times a quiet DOM with a request still outstanding is re-checked before the
-// page is called unstable. Each extra round costs one quiet window and only happens when
-// a request is genuinely in flight, so the common case never pays for it. Three is enough
-// for the shape that motivates it -- a deferred fetch, then the render it triggers -- and
-// bounds the cost on a page that emits an endless drip of requests.
-const MAX_ROUNDS = 3;
+/**
+ * `stable` is the discriminant, not a convenience copy of `reason === 'quiet'`: writing
+ * it as a union is what lets `if (!result.stable)` narrow `reason` to `UnstableReason`
+ * at the call site, so a reporter that cannot represent a settled page does not have to
+ * re-check anything or widen its own type to accept one.
+ */
+export type SettleResult =
+  | { stable: true; reason: 'quiet'; elapsedMs: number }
+  | { stable: false; reason: UnstableReason; elapsedMs: number };
+
+// How many consecutive clean windows must be observed before a page is called settled.
+//
+// This is the number that sets `settle`'s guarantee, and it is a straight trade: each
+// window costs `quietMs` of wall clock on every page and buys `quietMs` of coverage past
+// the moment the network went idle. Two was chosen on measurement, not preference --
+// see the contract note on `settle` below for what it buys and what it does not.
+//
+// One is not enough, and that is measured rather than argued: with a single window the
+// in-flight count is sampled at one instant, and a request issued after that instant is
+// never waited for. Sweeping the issue time across the band just past network-idle,
+// one window harvests two different DOMs from an unchanged page (14 runs of one, 6 of
+// the other) while reporting `stable: true` every time.
+const MIN_QUIET_WINDOWS = 2;
+
+// The hard stop on iteration. Each window that sees network activity resets the
+// confirmation count, so a page that drips requests indefinitely would otherwise watch
+// until the budget ran out; this bounds it sooner and reports `pending` rather than
+// letting the wall clock decide. The budget remains the outer bound.
+const MAX_ROUNDS = 6;
 
 // How much of a quiet window's allowance is held back from the in-page cap so the
 // Node-side guard can fire *after* it rather than racing it. Without the gap a wedged
@@ -113,18 +134,40 @@ async function quietWindow(
  *      non-idle until it has completed, which is what closes the race a fixed timer
  *      loses. Playwright discourages `networkidle` for *assertions*; a crawler deciding
  *      when a page is done is the case it fits.
- *   2. The DOM is then unchanged for `quietMs`, with nothing outstanding at the end of
- *      that window. The second half matters because idle is not a latch: a page can fire
- *      a deferred fetch *after* going idle, and a quiet window that ends with a request
- *      still in flight has proved nothing. Those rounds repeat up to `MAX_ROUNDS`.
+ *   2. `MIN_QUIET_WINDOWS` consecutive windows of `quietMs` then pass in which the DOM
+ *      does not change, no request starts, and none is outstanding at the end. Idle is
+ *      not a latch -- a page can defer its content fetch until after the document has
+ *      already gone idle -- so one window proves nothing on its own.
  *
  * `load` is deliberately not waited for separately. Playwright's lifecycle order is
  * `domcontentloaded` -> `load` -> `networkidle`, so a successful `networkidle` wait has
  * already awaited `load`, and an unsuccessful one would have consumed the same budget
  * either way.
  *
+ * ## What this does and does not guarantee
+ *
+ * **`settle` is deterministic with respect to content whose request is issued within
+ * `quietMs * MIN_QUIET_WINDOWS` -- 1000ms with the defaults -- of the moment the page's
+ * network last went idle. It is not deterministic beyond that, and it cannot tell that it
+ * was not.**
+ *
+ * That is not a defect to be fixed later; it is what a bounded wait is. Every wait has an
+ * edge, and past the edge the page is indistinguishable from one that has finished: no
+ * request is in flight, the DOM is not moving, and there is nothing left to observe. So
+ * past the edge `settle` returns `stable: true` and the crawl records the page as settled.
+ * **No `UnstablePage` is reported for this case, and none can be** -- R3 covers budget
+ * exhaustion, which is observable, not late work, which is not.
+ *
+ * The floor stated above is in terms of network-idle rather than `domcontentloaded`
+ * because that is what the code actually measures, and it is the more generous of the
+ * two: Playwright's `networkidle` cannot fire less than 500ms after the last request, so
+ * the floor is never earlier than DCL + 500ms + 1000ms. On real pages it is considerably
+ * later, because the page is busy for a while first -- measured at DCL + ~2.0s for the
+ * reference SPA and DCL + ~0.9s for the reference static site, giving effective edges of
+ * roughly DCL + 3.0s and DCL + 1.9s respectively.
+ *
  * The result is returned rather than swallowed: a page sampled mid-flight must not be
- * recorded as if it had genuinely stabilised (R3).
+ * recorded as if it had genuinely stabilised (R3) -- within the limit stated above.
  *
  * @param quietMs   The DOM must be unchanged for this long.
  * @param budgetMs  Total wall-clock bound for the whole call, enforced Node-side.
@@ -133,7 +176,9 @@ export async function settle(page: Page, quietMs = 500, budgetMs = 8000): Promis
   const start = Date.now();
   const remaining = () => budgetMs - (Date.now() - start);
   const done = (reason: SettleReason): SettleResult =>
-    ({ stable: reason === 'quiet', reason, elapsedMs: Date.now() - start });
+    reason === 'quiet'
+      ? { stable: true, reason, elapsedMs: Date.now() - start }
+      : { stable: false, reason, elapsedMs: Date.now() - start };
 
   // Playwright's own network bookkeeping is not readable, so requests are counted here.
   // Anything already in flight when `settle` is entered is invisible to this counter and
@@ -141,7 +186,11 @@ export async function settle(page: Page, quietMs = 500, budgetMs = 8000): Promis
   // read after `networkidle`, by which point every earlier request has finished and the
   // counter and reality agree.
   let inFlight = 0;
-  const opened = () => { inFlight += 1; };
+  // Monotonic, so a request that both starts and finishes inside one quiet window is
+  // still visible at the end of it. `inFlight` alone cannot see that request, and its
+  // render can land after we have already returned.
+  let started = 0;
+  const opened = () => { inFlight += 1; started += 1; };
   const closed = () => { inFlight = Math.max(0, inFlight - 1); };
   page.on('request', opened);
   page.on('requestfinished', closed);
@@ -177,22 +226,32 @@ export async function settle(page: Page, quietMs = 500, budgetMs = 8000): Promis
       }
     }
 
+    // A quiet window runs even when idle was never reached: such a page is going to be
+    // harvested regardless, and harvesting it at a DOM-quiet instant beats harvesting it
+    // at whatever moment the network phase happened to give up.
+    let confirmed = 0;
     for (let round = 0; round < MAX_ROUNDS; round++) {
       const left = remaining();
       if (left <= 0) return done('budget');
 
+      const startedBefore = started;
       const outcome = await quietWindow(page, quietMs, left);
       if (outcome === 'error') return done('error');
       if (outcome === 'abandoned') return done('budget');
       if (outcome === 'cap') return done('mutation');
 
-      // The DOM has held still. Whether that means anything depends on the network:
-      // if idle was never reached, or a request is outstanding right now, the page may
-      // simply not have received its content yet.
+      // Idle was never reached, so no number of quiet windows can establish that the
+      // content finished arriving. Say that, rather than counting windows towards a
+      // confirmation that would not mean anything.
       if (!networkIdle) return done('network');
-      if (inFlight === 0) return done('quiet');
+
+      // A window only counts as confirmation if the network was silent for the whole of
+      // it -- nothing started, nothing outstanding at the end. Any activity resets the
+      // count, so the windows that confirm are consecutive ones.
+      confirmed = (started === startedBefore && inFlight === 0) ? confirmed + 1 : 0;
+      if (confirmed >= MIN_QUIET_WINDOWS) return done('quiet');
     }
-    return done('network');
+    return done('pending');
   } finally {
     page.off('request', opened);
     page.off('requestfinished', closed);

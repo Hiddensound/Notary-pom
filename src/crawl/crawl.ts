@@ -5,7 +5,7 @@ import robotsParserImport from 'robots-parser';
 import type { Notebook, PageIR, PomBuilderConfig, RouteGroup } from '../types.js';
 import { createContext } from '../browser/context.js';
 import { settle } from '../browser/settle.js';
-import type { SettleReason } from '../browser/settle.js';
+import type { UnstableReason } from '../browser/settle.js';
 import { LoginRedirectError, looksLikeLogin } from '../browser/guard.js';
 import { harvest } from '../harvest/harvest.js';
 import { resolveElements } from '../resolve/resolve.js';
@@ -58,15 +58,23 @@ export type SettlePhase = 'discover' | 'validate' | 'harvest';
 export interface UnstablePage {
   url: string;
   phase: SettlePhase;
-  reason: SettleReason;
+  // Narrowed to exclude `quiet`: an `UnstablePage` is only ever constructed for a page
+  // `settle` refused to call stable, so `quiet` is not a state this can reach. The
+  // narrowing is what deletes the corresponding branch from `WHY` below, which would
+  // otherwise have been able to render the word "stabilised" underneath a heading saying
+  // the page did not stabilise.
+  reason: UnstableReason;
   elapsedMs: number;
 }
 
 export type UnstableReporter = (page: UnstablePage) => void;
 
-const WHY: Record<SettleReason, string> = {
-  quiet: 'stabilised',
+// `network` and `pending` were one reason until they were measured apart: a page that
+// never reached idle and a page that reached it and then kept making requests are
+// different diagnoses, and the single string used to be wrong for the second of them.
+const WHY: Record<UnstableReason, string> = {
   network: 'the network never went idle, so content may still have been arriving',
+  pending: 'the page kept making requests, so content may still have been arriving',
   mutation: 'the DOM never stopped changing',
   budget: 'the settle budget ran out',
   error: 'the stability check could not be run',

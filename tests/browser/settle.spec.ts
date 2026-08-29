@@ -33,15 +33,17 @@ function shell(deferMs: number): string {
 const ITEMS = Array.from({ length: 25 }, (_, i) => i + 1);
 
 // A fixture whose content fetch resolves after `delay()` ms. `delay` is read per request
-// so one page can be re-navigated with a different latency each time.
-function spaRoute(deferMs: number, delay: () => number) {
+// so one page can be re-navigated with a different issue time and latency each time.
+// Both are read per request precisely so a test can *sweep* either of them: the two are
+// independent variables and a gate that sweeps only one proves only one.
+function spaRoute(defer: () => number, delay: () => number) {
   return async (route: Route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === '/api/items') {
       await new Promise((r) => setTimeout(r, delay()));
       return route.fulfill({ contentType: 'application/json', body: JSON.stringify(ITEMS) });
     }
-    return route.fulfill({ contentType: 'text/html', body: shell(deferMs) });
+    return route.fulfill({ contentType: 'text/html', body: shell(defer()) });
   };
 }
 
@@ -51,20 +53,22 @@ const itemCount = (records: Awaited<ReturnType<typeof harvest>>) =>
 // ---------------------------------------------------------------------------
 // (a) Delayed XHR hydration -- the 36/11/11 reproduction in miniature.
 //
-// The 2000ms latency is chosen to be longer than the confirmation rounds can cover on
-// their own (3 rounds x 500ms), so this fixture pins the `networkidle` wait specifically:
-// only a wait whose length adapts to the actual request survives it.
+// The 2000ms latency is chosen to be longer than the confirmation windows can cover on
+// their own, so this fixture pins the `networkidle` wait specifically: only a wait whose
+// length adapts to the actual request survives it.
 // ---------------------------------------------------------------------------
 
 test('settle waits for content that arrives by XHR after the quiet window would have expired', async ({ page }) => {
-  await page.route('**/*', spaRoute(0, () => 2000));
+  await page.route('**/*', spaRoute(() => 0, () => 2000));
   await page.goto('https://spa.test/', { waitUntil: 'domcontentloaded' });
 
   const result = await settle(page);
 
-  expect(result.stable).toBe(true);
-  expect(result.reason).toBe('quiet');
+  // The DOM is the property under test, so it is asserted first: an assertion on the
+  // result shape would fail earlier against a `settle` that returns void, and a RED that
+  // dies on an earlier line is not evidence for the line under test.
   expect(itemCount(await harvest(page, 'data-testid'))).toBe(25);
+  expect(result).toEqual({ stable: true, reason: 'quiet', elapsedMs: expect.any(Number) });
 });
 
 // ---------------------------------------------------------------------------
@@ -73,14 +77,13 @@ test('settle waits for content that arrives by XHR after the quiet window would 
 // ---------------------------------------------------------------------------
 
 test('settle waits for a fetch issued after the document has already gone network-idle', async ({ page }) => {
-  await page.route('**/*', spaRoute(800, () => 600));
+  await page.route('**/*', spaRoute(() => 800, () => 600));
   await page.goto('https://spa.test/', { waitUntil: 'domcontentloaded' });
 
   const result = await settle(page);
 
-  expect(result.stable).toBe(true);
-  expect(result.reason).toBe('quiet');
   expect(itemCount(await harvest(page, 'data-testid'))).toBe(25);
+  expect(result).toEqual({ stable: true, reason: 'quiet', elapsedMs: expect.any(Number) });
 });
 
 // ---------------------------------------------------------------------------
@@ -99,10 +102,13 @@ test('settle reports a never-quiet page as unstable rather than returning silent
   const start = Date.now();
   const result = await settle(page, 300, 2500);
 
-  expect(result.stable).toBe(false);
-  expect(result.reason).toBe('mutation');
   // R2: the Node-side budget holds, not merely the in-page one.
   expect(Date.now() - start).toBeLessThan(4000);
+  // The whole point of the result type is that exhaustion is not silence, so the shape is
+  // asserted as a whole: against a `settle` that returns void this reads
+  // `expect(undefined).toEqual({...})`, which names the missing contract instead of
+  // dying on a TypeError one property in.
+  expect(result).toEqual({ stable: false, reason: 'mutation', elapsedMs: expect.any(Number) });
   expect(result.elapsedMs).toBeLessThan(4000);
 });
 
@@ -134,8 +140,11 @@ test('settle leaves no timer armed in the page when it gives up on a never-quiet
   const result = await settle(page, 300, 2500);
   const armed = await page.evaluate(() => (window as unknown as { __pending: Set<number> }).__pending.size);
 
-  expect(result.stable).toBe(false);
+  // The leak is the property under test, so `armed` is asserted before anything about the
+  // result: asserting `result.stable` first made this test's RED a TypeError that never
+  // reached this line, which proved nothing about a leaked timer (review A-5).
   expect(armed).toBe(0);
+  expect(result.stable).toBe(false);
 });
 
 // ---------------------------------------------------------------------------
@@ -149,12 +158,13 @@ test('settle reports a plain static page stable, quickly', async ({ page }) => {
   }));
   await page.goto('https://static.test/', { waitUntil: 'domcontentloaded' });
 
+  const start = Date.now();
   const result = await settle(page);
 
-  expect(result.stable).toBe(true);
-  expect(result.reason).toBe('quiet');
-  // R4: a server-rendered page must not pay a large fixed penalty.
-  expect(result.elapsedMs).toBeLessThan(2500);
+  // R4: a server-rendered page must not pay a large fixed penalty. Measured from the
+  // wall clock first, so this line does not depend on the result type existing.
+  expect(Date.now() - start).toBeLessThan(2500);
+  expect(result).toEqual({ stable: true, reason: 'quiet', elapsedMs: expect.any(Number) });
 });
 
 // ---------------------------------------------------------------------------
@@ -171,7 +181,7 @@ test('harvest of an XHR-hydrated page is identical across 20 runs with the laten
   test.setTimeout(240_000);
 
   let delay = 300;
-  await page.route('**/*', spaRoute(0, () => delay));
+  await page.route('**/*', spaRoute(() => 0, () => delay));
 
   const counts: number[] = [];
   for (let i = 0; i < 20; i++) {
@@ -187,6 +197,65 @@ test('harvest of an XHR-hydrated page is identical across 20 runs with the laten
   console.log(`SETTLE DETERMINISM SEQUENCE: ${JSON.stringify(counts)}`);
 
   expect(new Set(counts).size).toBe(1);
+});
+
+// ---------------------------------------------------------------------------
+// The acceptance criterion, second half. Latency and issue time are independent
+// variables, and the sweep above only moves one of them: with the fetch issued during
+// parse, `networkidle` covers every latency by construction, so that sweep is forced to
+// come out single-valued whatever the confirmation logic does.
+//
+// This sweep moves the *issue* time instead, across the band immediately past the point
+// where the document goes network-idle -- which is where a check that samples the
+// in-flight count at one instant stops covering anything. Review A-1 measured the shipped
+// code producing {"4":14,"29":6} over exactly this band while reporting `stable: true`
+// every time; that is the original 36/11/11 defect, one quiet window later.
+// ---------------------------------------------------------------------------
+
+test('harvest of an XHR-hydrated page is identical across 20 runs with the request issue time swept past network-idle', async ({ page }) => {
+  test.setTimeout(240_000);
+
+  let defer = 900;
+  await page.route('**/*', spaRoute(() => defer, () => 600));
+
+  const counts: number[] = [];
+  const reported: string[] = [];
+  for (let i = 0; i < 20; i++) {
+    defer = 900 + i * 20; // 900..1280ms after domcontentloaded
+    await page.goto('https://spa.test/', { waitUntil: 'domcontentloaded' });
+    const result = await settle(page);
+    reported.push(`${result.stable}/${result.reason}`);
+    counts.push((await harvest(page, 'data-testid')).length);
+  }
+
+  const distribution: Record<string, number> = {};
+  for (const c of counts) distribution[c] = (distribution[c] ?? 0) + 1;
+  console.log(`SETTLE ISSUE-TIME DISTRIBUTION (20 runs, issued 900..1280ms after DCL): ${JSON.stringify(distribution)}`);
+  console.log(`SETTLE ISSUE-TIME SEQUENCE: ${JSON.stringify(counts)}`);
+  console.log(`SETTLE ISSUE-TIME REPORTED: ${JSON.stringify([...new Set(reported)])}`);
+
+  expect(new Set(counts).size).toBe(1);
+});
+
+// ---------------------------------------------------------------------------
+// The residual boundary, pinned.
+//
+// `settle`'s guarantee is bounded and the bound is a number: content is waited for if its
+// request is issued within `quietMs * MIN_QUIET_WINDOWS` (1000ms by default) of the page
+// going network-idle. There is no latch available and no wait that covers everything, so
+// the honest thing is to state where the edge is and make it fail loudly if anyone moves
+// it inward. 1250ms is a quarter-window inside the edge and a quarter-window outside a
+// single-window design, so this test distinguishes the two without sitting on the cliff.
+// ---------------------------------------------------------------------------
+
+test('content requested 1250ms after domcontentloaded is still waited for', async ({ page }) => {
+  await page.route('**/*', spaRoute(() => 1250, () => 400));
+  await page.goto('https://spa.test/', { waitUntil: 'domcontentloaded' });
+
+  const result = await settle(page);
+
+  expect(itemCount(await harvest(page, 'data-testid'))).toBe(25);
+  expect(result.stable).toBe(true);
 });
 
 // ---------------------------------------------------------------------------
