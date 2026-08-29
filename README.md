@@ -199,8 +199,16 @@ flight, nothing moving, nothing left to observe — so POMBuilder records it as 
 and says nothing. The edge is a real number rather than a promise because every bounded
 wait has one; there is no signal a page emits that means "I am done." In practice the
 edge lands well past a second after `domcontentloaded`, because network-idle itself does
-not arrive until the page has finished its initial burst (measured at ~2.0 s after
-`domcontentloaded` on a React storefront, ~0.9 s on a server-rendered WooCommerce page).
+not arrive until the page has finished its initial burst (measured at 2.0-2.1 s after
+`domcontentloaded` on a React storefront and 0.55-0.92 s on a server-rendered WooCommerce
+page, the slower end of each on a cold cache).
+
+**What it costs.** A page that settles promptly costs about 1.5 s per page load. A page
+that keeps making requests after it has gone idle -- an analytics beacon, a heartbeat, a
+session ping -- costs up to about 3.6 s instead, because each request restarts the
+confirmation and the wait runs to its internal limit. That is the ceiling, not the
+typical case, and it is per page load: a crawl of a beacon-carrying site is slower by
+roughly two seconds per page and route template. There is no setting for it.
 
 **What it warns about.** Some pages never satisfy the wait at all: a carousel, a ticker,
 a polling widget, a CSS animation that churns a class attribute, or a page holding a
@@ -210,6 +218,33 @@ vary between runs and `diff` may report drift for elements that never actually c
 `crawl`, `build` and `diff` all name those pages on stderr, and the `pombuilder_crawl`
 and `pombuilder_diff` MCP tools return the same text in their tool result.
 
+The warning is deliberately narrow, so that it means something when it fires. A page
+whose background requests never touch the DOM — analytics, telemetry, a keep-alive — is
+**not** warned about, even though those requests do make the page slower to settle: the
+DOM held still throughout, the harvest is the same one an identical page without the
+beacon would produce, and warning about it would fire on most commercial sites while
+saying nothing about the harvest. What is warned about is a page whose DOM was still
+changing, or still being changed by arriving content, when POMBuilder had to stop
+looking.
+
+**What to do when it fires.** In order:
+
+1. **Open the page and look at what moves.** The reason on each line says which kind it
+   is: `the DOM never stopped changing` is an animation, carousel or ticker;
+   `the page kept making requests` is content still streaming in; `the network never went
+   idle` is a long-lived connection.
+2. **Check the getters for that page object.** The harvest is a real snapshot, just an
+   early one, and everything in it was verified against the live DOM at the time. What a
+   warning means is that elements may be *missing*, not that the ones present are wrong.
+   If the page object has the members you need, the warning costs you nothing.
+3. **Re-run `crawl` and `diff` the two.** Drift on a warned page between two runs of an
+   unchanged site tells you which members are the unreliable ones.
+4. **If the page is genuinely never going to hold still**, keep the crawler off it with
+   `exclude`, and hand-write that one page object against the generated base class — the
+   base/subclass split exists for exactly this. Use `exclude` for a page, never for a
+   whole site: a site-wide warning almost always means an animation in shared chrome (a
+   header carousel, a marquee), and excluding every page is not the remedy.
+
 **What it does not warn about.** The notebook does not record which pages were unstable,
 so only the *fresh* side of a `diff` is covered. If yesterday's `build` wrote its
 baseline from a moving page and today's site has settled, today's `diff` reports drift
@@ -217,8 +252,9 @@ with nothing on stderr — the current crawl was fine, and the notebook cannot s
 stored one was not. If a `diff` looks larger than the change that caused it, check the
 crawl log that produced the baseline before you suspect the site.
 
-There is no setting for the wait budget. The lever for a page that will not hold still
-is `exclude` (or a narrower `maxDepth`), to keep the crawler off it entirely.
+There is no setting for the wait budget, deliberately: it is one of the few numbers that
+determines whether the notebook is reproducible, and a per-site override would make
+"POMBuilder is deterministic" a claim about someone's config rather than about the tool.
 
 **Same-page, state-mutating links aren't recognised as such.** The deny-list
 (`src/url/denyList.ts`) only flags destructive-sounding words — sign-out, delete,

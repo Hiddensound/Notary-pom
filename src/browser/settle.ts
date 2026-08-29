@@ -10,8 +10,10 @@ import type { Page } from '@playwright/test';
  *                 stable outcome.
  * - `network`  -- the page never went network-idle inside its share of the budget, so
  *                 nothing could establish that its content had finished arriving.
- * - `pending`  -- the page did go idle, but requests kept starting or staying outstanding
- *                 for as long as we watched. Content may still have been arriving.
+ * - `pending`  -- the page did go idle, but requests kept arriving for as long as we
+ *                 watched AND at least one of them changed the DOM, so content was
+ *                 demonstrably still being delivered. Requests that never changed
+ *                 anything do not produce this: see the note on the confirmation loop.
  * - `mutation` -- the DOM never stopped changing (a carousel, a ticker, a poller, or a
  *                 CSS animation churning a class attribute). The page was sampled at an
  *                 arbitrary point in a mutation stream.
@@ -50,10 +52,17 @@ export type SettleResult =
 // the other) while reporting `stable: true` every time.
 const MIN_QUIET_WINDOWS = 2;
 
-// The hard stop on iteration. Each window that sees network activity resets the
-// confirmation count, so a page that drips requests indefinitely would otherwise watch
-// until the budget ran out; this bounds it sooner and reports `pending` rather than
-// letting the wall clock decide. The budget remains the outer bound.
+// The hard stop on iteration, and the thing that sets the ceiling on what `settle` can
+// cost. Each window that sees network activity resets the confirmation count, so a page
+// that keeps making requests -- an analytics beacon, a heartbeat, a session ping -- never
+// confirms and watches until this runs out. Measured on an 800ms beacon: ~3.6s, against
+// ~1.5s for a page that confirms immediately. That tail is the real cost of `settle` on a
+// beacon-carrying site, and `settle bounds what a page that re-arms the confirmation every
+// window can cost` pins it; the budget remains the outer bound beyond that.
+//
+// Six is the smallest value the deferred-content shapes actually need: a request issued
+// late in the covered band takes one window to start, one or two for the response and the
+// render it triggers, then MIN_QUIET_WINDOWS clean ones to confirm.
 const MAX_ROUNDS = 6;
 
 // How much of a quiet window's allowance is held back from the in-page cap so the
@@ -192,9 +201,13 @@ async function quietWindow(
  * because that is what the code actually measures, and it is the more generous of the
  * two: Playwright's `networkidle` cannot fire less than 500ms after the last request, so
  * the floor is never earlier than DCL + 500ms + 1000ms. On real pages it is considerably
- * later, because the page is busy for a while first -- measured at DCL + ~2.0s for the
- * reference SPA and DCL + ~0.9s for the reference static site, giving effective edges of
- * roughly DCL + 3.0s and DCL + 1.9s respectively.
+ * later, because the page is busy for a while first. Measured on the reference sites,
+ * `networkidle` arrives at DCL + 2.0-2.1s (a React storefront) and DCL + 0.55-0.92s (a
+ * server-rendered WooCommerce page) -- the high end of each range on a cold cache, the low
+ * end warm -- so the effective edge is roughly DCL + 3.0s and DCL + 1.9s cold, DCL + 2.1s
+ * and DCL + 1.55s warm. The guarantee itself is the network-idle-relative one; these are
+ * what it works out to in practice, and they are quoted as ranges because a cold first
+ * visit and a warm re-visit differ by about a second on the SPA.
  *
  * The result is returned rather than swallowed: a page sampled mid-flight must not be
  * recorded as if it had genuinely stabilised (R3) -- within the limit stated above.
