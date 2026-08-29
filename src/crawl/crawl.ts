@@ -80,6 +80,9 @@ const WHY: Record<UnstableReason, string> = {
   error: 'the stability check could not be run',
 };
 
+// How many individual page loads the warning names before summarising the rest.
+const MAX_LISTED = 10;
+
 /**
  * Render the unstable-page report for a human. Shared by the CLI and the MCP server so
  * both say the same thing; a crawl that sampled a moving page must not look like one
@@ -87,8 +90,12 @@ const WHY: Record<UnstableReason, string> = {
  */
 export function formatUnstable(pages: UnstablePage[]): string {
   if (pages.length === 0) return '';
-  const lines = pages.map(
+  // Every page is reported once per visit, so a 50-page animated site would otherwise
+  // emit 100+ lines of stderr and bury the one line that says how widespread it is. The
+  // count is never truncated; only the list is.
+  const lines = pages.slice(0, MAX_LISTED).map(
     (p) => `  ${p.url} (${p.phase}, ${p.elapsedMs}ms): ${WHY[p.reason]}.`);
+  if (pages.length > MAX_LISTED) lines.push(`  ... and ${pages.length - MAX_LISTED} more.`);
   return `Warning: ${pages.length} page load${pages.length === 1 ? ' was' : 's were'} sampled `
     + 'before the page stabilised. The harvest may be incomplete, and `pombuilder diff` may '
     + 'report drift for elements that never actually changed.\n'
@@ -102,13 +109,15 @@ export function formatUnstable(pages: UnstablePage[]): string {
 // on a page that by construction is not going to hold still.
 async function settleAt(
   page: Page,
-  url: string,
   phase: SettlePhase,
   report: UnstableReporter | undefined,
 ): Promise<void> {
   const result = await settle(page);
   if (!result.stable) {
-    report?.({ url, phase, reason: result.reason, elapsedMs: result.elapsedMs });
+    // `page.url()`, not the URL the crawl asked for: under a redirect those differ, and
+    // the one worth naming is the page actually sampled. This is only the message --
+    // comparing that URL's origin to the seed is a different, deliberately deferred job.
+    report?.({ url: page.url(), phase, reason: result.reason, elapsedMs: result.elapsedMs });
   }
 }
 
@@ -164,7 +173,7 @@ export async function validateGroups(
     const prints: string[] = [];
     for (const url of [first, second]) {
       await page.goto(url, { waitUntil: 'domcontentloaded' });
-      await settleAt(page, url, 'validate', report);
+      await settleAt(page, 'validate', report);
       if (await looksLikeLogin(page, config)) throw new LoginRedirectError(page.url());
       prints.push(structuralFingerprint(await page.locator('body').ariaSnapshot()));
     }
@@ -233,7 +242,7 @@ export async function crawlSite(
     while (queue.length && discovered.length < config.maxPages) {
       const { url, depth } = queue.shift()!;
       await page.goto(url, { waitUntil: 'domcontentloaded' });
-      await settleAt(page, url, 'discover', onUnstable);
+      await settleAt(page, 'discover', onUnstable);
 
       if (await looksLikeLogin(page, config)) {
         throw new LoginRedirectError(page.url());
@@ -260,7 +269,7 @@ export async function crawlSite(
     const groups = await validateGroups(page, templateRoutes(discovered), config, onUnstable);
     for (const group of groups) {
       await page.goto(group.representativeUrl, { waitUntil: 'domcontentloaded' });
-      await settleAt(page, group.representativeUrl, 'harvest', onUnstable);
+      await settleAt(page, 'harvest', onUnstable);
 
       if (await looksLikeLogin(page, config)) {
         throw new LoginRedirectError(page.url());

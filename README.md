@@ -188,18 +188,37 @@ is passed per tool call as arguments.
 
 Before harvesting, POMBuilder waits for a page to stop changing: first for the network
 to go idle — which is what makes a single-page app's XHR-delivered content arrive
-before, rather than after, the harvest — and then for a window with no DOM mutation and
-no request outstanding. That whole wait is bounded, and some pages never satisfy it: a
-carousel, a ticker, a polling widget, a CSS animation that churns a class attribute, or
-a page holding a long-lived request open (server-sent events, a long poll).
+before, rather than after, the harvest — and then for two consecutive 500 ms windows in
+which the DOM does not change, no request starts, and none is left outstanding.
 
-Such a page is still crawled, but it is sampled at an arbitrary point rather than at a
-settled one, so the elements harvested from it may vary between runs and `diff` may
-report drift for elements that never actually changed. `crawl` and `diff` both name
-those pages on stderr. The notebook itself does not record them: `diff` re-crawls in the
-same process, so the live warning already covers the case the record would have served.
-If a page is listed there, treat that page's diff output with suspicion rather than the
-site.
+**What that guarantees, precisely.** The crawl is deterministic with respect to content
+whose request is issued within 1 second of the page going network-idle. It is not
+deterministic beyond that, and it cannot tell that it was not: past that edge a page
+that is about to fetch something looks exactly like one that has finished — nothing in
+flight, nothing moving, nothing left to observe — so POMBuilder records it as settled
+and says nothing. The edge is a real number rather than a promise because every bounded
+wait has one; there is no signal a page emits that means "I am done." In practice the
+edge lands well past a second after `domcontentloaded`, because network-idle itself does
+not arrive until the page has finished its initial burst (measured at ~2.0 s after
+`domcontentloaded` on a React storefront, ~0.9 s on a server-rendered WooCommerce page).
+
+**What it warns about.** Some pages never satisfy the wait at all: a carousel, a ticker,
+a polling widget, a CSS animation that churns a class attribute, or a page holding a
+long-lived request open (server-sent events, a long poll). Those are sampled at an
+arbitrary point rather than at a settled one, so the elements harvested from them can
+vary between runs and `diff` may report drift for elements that never actually changed.
+`crawl`, `build` and `diff` all name those pages on stderr, and the `pombuilder_crawl`
+and `pombuilder_diff` MCP tools return the same text in their tool result.
+
+**What it does not warn about.** The notebook does not record which pages were unstable,
+so only the *fresh* side of a `diff` is covered. If yesterday's `build` wrote its
+baseline from a moving page and today's site has settled, today's `diff` reports drift
+with nothing on stderr — the current crawl was fine, and the notebook cannot say the
+stored one was not. If a `diff` looks larger than the change that caused it, check the
+crawl log that produced the baseline before you suspect the site.
+
+There is no setting for the wait budget. The lever for a page that will not hold still
+is `exclude` (or a narrower `maxDepth`), to keep the crawler off it entirely.
 
 **Same-page, state-mutating links aren't recognised as such.** The deny-list
 (`src/url/denyList.ts`) only flags destructive-sounding words — sign-out, delete,

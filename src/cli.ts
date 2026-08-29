@@ -36,8 +36,11 @@ program.command('crawl').argument('[url]').option('-c, --config <path>')
       const unresolved = nb.pages.reduce(
         (n, p) => n + p.elements.filter((e) => e.status === 'unresolved').length, 0);
       console.log(`${nb.pages.length} pages, ${total} elements, ${unresolved} unresolved.`);
-      // A page sampled mid-flight is not recorded as if it were stable: the notebook
-      // cannot say so without a schema change, so the crawl says so out loud instead.
+      // A page sampled mid-flight is not recorded as if it were stable. The notebook
+      // could carry the flag -- an optional `PageIR` field is additive and `readNotebook`
+      // only rejects on a version mismatch -- but it would change the bytes of every
+      // notebook on every site including the stable ones, so the crawl says it out loud
+      // instead. See the README for what that does and does not cover.
       if (unstable.length) console.warn(formatUnstable(unstable));
     } finally {
       await browser.close();
