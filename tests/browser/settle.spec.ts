@@ -255,7 +255,12 @@ test('settle reports a plain static page stable, quickly', async ({ page }) => {
 
   // R4: a server-rendered page must not pay a large fixed penalty. Measured from the
   // wall clock first, so this line does not depend on the result type existing.
-  expect(Date.now() - start).toBeLessThan(2500);
+  //
+  // 1900ms, not 2500ms: at 2500 this assertion did not constrain the thing that varies.
+  // Two confirmation windows measure 1541ms here (+-10 over 10 samples) and three measure
+  // 2049ms, so 2500 let a 50% regression through silently. 1900 fails a three-window build
+  // by 149ms and passes the shipped two-window one by 359ms.
+  expect(Date.now() - start).toBeLessThan(1900);
   expect(result).toEqual({ stable: true, reason: 'quiet', elapsedMs: expect.any(Number) });
 });
 
@@ -418,6 +423,98 @@ test('settle bounds its wait for domcontentloaded rather than running on the con
   const wall = Date.now() - start;
 
   expect(wall).toBeLessThan(2000);
+  expect(result.reason).toBe('budget');
+  expect(result.stable).toBe(false);
+});
+
+// ---------------------------------------------------------------------------
+// A page that goes network-idle and then keeps making requests that never touch the DOM:
+// an analytics beacon, a heartbeat, a session ping. Extremely common, and it re-arms the
+// confirmation counter every window, which is the tail of the cost distribution rather
+// than its median.
+//
+// `settle`'s reported figures (510 -> 1023 -> 1541ms) are all taken on pages that confirm
+// on the first two windows. These fixtures pin what happens when nothing ever does.
+// ---------------------------------------------------------------------------
+
+const BEACON_BODY = `<!DOCTYPE html><html><body>
+  <main><h1>Beacon</h1><button data-testid="go">Go</button></main>
+  <script>
+    // Starts after the document has already gone network-idle, and leaves a gap longer
+    // than Playwright's 500ms idle window, so the page really does reach idle first.
+    setTimeout(function(){ setInterval(function(){ fetch('/beacon'); }, 800); }, 600);
+  </script></body></html>`;
+
+const POLL_RENDER_BODY = `<!DOCTYPE html><html><body>
+  <main><h1>Poll</h1><ul id="a"></ul></main>
+  <script>
+    var n = 0;
+    setTimeout(function(){ setInterval(function(){
+      fetch('/beacon').then(function(){ n += 1;
+        document.getElementById('a').innerHTML += '<li>row ' + n + '</li>'; });
+    }, 800); }, 600);
+  </script></body></html>`;
+
+const servePolling = (body: string) => async (route: Route) => {
+  const path = new URL(route.request().url()).pathname;
+  if (path === '/beacon') return route.fulfill({ contentType: 'application/json', body: '{}' });
+  return route.fulfill({ contentType: 'text/html', body });
+};
+
+test('settle bounds what a page that re-arms the confirmation every window can cost', async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.route('**/*', servePolling(BEACON_BODY));
+  await page.goto('https://beacon.test/', { waitUntil: 'domcontentloaded' });
+
+  const start = Date.now();
+  await settle(page);
+  const wall = Date.now() - start;
+
+  // The ceiling, not the median. Measured at ~3.6s (idle wait plus MAX_ROUNDS windows);
+  // 4200 leaves ~600ms of headroom and fails if MAX_ROUNDS or MIN_QUIET_WINDOWS grows.
+  // Nothing else in the suite constrains this path.
+  expect(wall).toBeLessThan(4200);
+});
+
+test('a page whose extra requests never touch the DOM is settled, not reported unstable', async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.route('**/*', servePolling(BEACON_BODY));
+  await page.goto('https://beacon.test/', { waitUntil: 'domcontentloaded' });
+
+  const result = await settle(page);
+
+  // The DOM did not move once in the whole watch, so the requests demonstrably were not
+  // delivering content. Reporting this page unstable is a false alarm: an identical page
+  // without the beacon is reported stable, and the harvest is the same either way.
+  expect(result).toEqual({ stable: true, reason: 'quiet', elapsedMs: expect.any(Number) });
+});
+
+test('a page whose extra requests do change the DOM is still reported unstable', async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.route('**/*', servePolling(POLL_RENDER_BODY));
+  await page.goto('https://poll.test/', { waitUntil: 'domcontentloaded' });
+
+  const result = await settle(page);
+
+  // The counterpart to the test above, and the reason the distinction is drawn on an
+  // observable property rather than on guessing what a request was for: here the requests
+  // are demonstrably delivering content, so `pending` is the truth.
+  expect(result.reason).toBe('pending');
+  expect(result.stable).toBe(false);
+});
+
+test('a static page whose last window is squeezed by the budget reports budget, not mutation', async ({ page }) => {
+  await page.route('**/*', (route) => route.fulfill({
+    contentType: 'text/html',
+    body: '<!DOCTYPE html><html><body><main><h1>Static</h1><button>Go</button></main></body></html>',
+  }));
+  await page.goto('https://static.test/', { waitUntil: 'domcontentloaded' });
+
+  // 1500ms leaves the last window less than `quietMs + GUARD_SLACK_MS`, so it caps before
+  // the quiet timer can fire. The page has no script and never mutates, so calling that a
+  // mutation stream is the same conflation A-7 fixed one line away.
+  const result = await settle(page, 500, 1500);
+
   expect(result.reason).toBe('budget');
   expect(result.stable).toBe(false);
 });

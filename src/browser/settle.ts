@@ -72,31 +72,48 @@ const GUARD_SLACK_MS = 250;
  * default (R2). Both fit inside `allowanceMs`, so this function never overruns what it
  * was given.
  */
+interface QuietWindow {
+  outcome: 'quiet' | 'cap' | 'abandoned' | 'error';
+  /**
+   * Whether the DOM actually changed while this window was open.
+   *
+   * This is the observable property that separates two states the caller would otherwise
+   * have to guess between: requests that are delivering content, and requests that are
+   * not. It is what lets a page whose beacons fire forever without touching the DOM be
+   * called settled, and a `cap` on a page that never mutated be called what it is -- a
+   * budget that ran out -- rather than a mutation stream that does not exist.
+   */
+  changed: boolean;
+}
+
 async function quietWindow(
   page: Page,
   quietMs: number,
   allowanceMs: number,
-): Promise<'quiet' | 'cap' | 'abandoned' | 'error'> {
+): Promise<QuietWindow> {
   const capMs = Math.max(1, allowanceMs - GUARD_SLACK_MS);
   let guardTimer: ReturnType<typeof setTimeout> | undefined;
-  const guard = new Promise<'abandoned'>((resolve) => {
-    guardTimer = setTimeout(() => resolve('abandoned'), Math.max(1, allowanceMs));
+  const guard = new Promise<QuietWindow>((resolve) => {
+    // A guard that fires knows nothing about what the DOM did -- the in-page promise
+    // never came back to say -- so it reports no change rather than inventing one.
+    guardTimer = setTimeout(() => resolve({ outcome: 'abandoned', changed: false }), Math.max(1, allowanceMs));
   });
 
   const observed = page
     .evaluate(
       ([quiet, cap]) =>
-        new Promise<'quiet' | 'cap'>((resolve) => {
+        new Promise<{ outcome: 'quiet' | 'cap'; changed: boolean }>((resolve) => {
           let timer: ReturnType<typeof setTimeout>;
           let hardStop: ReturnType<typeof setTimeout>;
           let observer: MutationObserver;
-          const finish = (why: 'quiet' | 'cap') => {
+          let changed = false;
+          const finish = (outcome: 'quiet' | 'cap') => {
             observer.disconnect();
             // The cap path used to clear only `hardStop`, leaving the quiet timer armed
             // in the page for the rest of the document's life.
             clearTimeout(timer);
             clearTimeout(hardStop);
-            resolve(why);
+            resolve({ outcome, changed });
           };
           // The Node side gives up on this promise if it never settles, and the caller
           // then harvests this very document -- so the observer must be able to retire
@@ -107,6 +124,7 @@ async function quietWindow(
           // runs, which is the harmless half of the problem.
           const deadline = Date.now() + cap;
           observer = new MutationObserver(() => {
+            changed = true;
             if (Date.now() > deadline) {
               finish('cap');
               return;
@@ -122,7 +140,7 @@ async function quietWindow(
         }),
       [quietMs, capMs] as const,
     )
-    .catch((): 'error' => 'error');
+    .catch((): QuietWindow => ({ outcome: 'error', changed: false }));
 
   try {
     return await Promise.race([observed, guard]);
@@ -242,15 +260,20 @@ export async function settle(page: Page, quietMs = 500, budgetMs = 8000): Promis
     // harvested regardless, and harvesting it at a DOM-quiet instant beats harvesting it
     // at whatever moment the network phase happened to give up.
     let confirmed = 0;
+    let sawChange = false;
     for (let round = 0; round < MAX_ROUNDS; round++) {
       const left = remaining();
       if (left <= 0) return done('budget');
 
       const startedBefore = started;
-      const outcome = await quietWindow(page, quietMs, left);
-      if (outcome === 'error') return done('error');
-      if (outcome === 'abandoned') return done('budget');
-      if (outcome === 'cap') return done('mutation');
+      const window = await quietWindow(page, quietMs, left);
+      sawChange = sawChange || window.changed;
+      if (window.outcome === 'error') return done('error');
+      if (window.outcome === 'abandoned') return done('budget');
+      // A window that hit its cap because the DOM would not stop changing is a mutation
+      // stream. A window that hit its cap on a page that never mutated at all was simply
+      // given less time than one quiet window needs, which is a budget, not a carousel.
+      if (window.outcome === 'cap') return done(window.changed ? 'mutation' : 'budget');
 
       // Idle was never reached, so no number of quiet windows can establish that the
       // content finished arriving. Say that, rather than counting windows towards a
@@ -263,7 +286,15 @@ export async function settle(page: Page, quietMs = 500, budgetMs = 8000): Promis
       confirmed = (started === startedBefore && inFlight === 0) ? confirmed + 1 : 0;
       if (confirmed >= MIN_QUIET_WINDOWS) return done('quiet');
     }
-    return done('pending');
+
+    // The watch ran out of rounds with requests still arriving. What that means depends on
+    // whether any of them ever changed anything: a page that polled for the whole watch
+    // without the DOM moving once has demonstrated its requests are not delivering
+    // content -- an analytics beacon, a heartbeat, a session ping -- and calling it
+    // unstable would be a false alarm on a property uncorrelated with harvest quality,
+    // since the identical page without the beacon is called stable and harvests the same.
+    // If the DOM did move, the requests were delivering, and `pending` is the truth.
+    return done(sawChange ? 'pending' : 'quiet');
   } finally {
     page.off('request', opened);
     page.off('requestfinished', closed);
