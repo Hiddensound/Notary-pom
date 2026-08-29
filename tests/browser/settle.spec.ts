@@ -50,10 +50,14 @@ const itemCount = (records: Awaited<ReturnType<typeof harvest>>) =>
 
 // ---------------------------------------------------------------------------
 // (a) Delayed XHR hydration -- the 36/11/11 reproduction in miniature.
+//
+// The 2000ms latency is chosen to be longer than the confirmation rounds can cover on
+// their own (3 rounds x 500ms), so this fixture pins the `networkidle` wait specifically:
+// only a wait whose length adapts to the actual request survives it.
 // ---------------------------------------------------------------------------
 
 test('settle waits for content that arrives by XHR after the quiet window would have expired', async ({ page }) => {
-  await page.route('**/*', spaRoute(0, () => 900));
+  await page.route('**/*', spaRoute(0, () => 2000));
   await page.goto('https://spa.test/', { waitUntil: 'domcontentloaded' });
 
   const result = await settle(page);
