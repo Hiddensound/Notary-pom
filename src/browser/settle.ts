@@ -35,22 +35,31 @@ export interface SettleResult {
 // bounds the cost on a page that emits an endless drip of requests.
 const MAX_ROUNDS = 3;
 
+// How much of a quiet window's allowance is held back from the in-page cap so the
+// Node-side guard can fire *after* it rather than racing it. Without the gap a wedged
+// renderer would be indistinguishable from a busy one; with it, the guard is strictly the
+// backstop and the whole window still fits inside the allowance it was given.
+const GUARD_SLACK_MS = 250;
+
 /**
- * Wait for one window of `quietMs` with no DOM mutation, giving up after `capMs`.
+ * Wait for one window of `quietMs` with no DOM mutation, within a total allowance of
+ * `allowanceMs`.
  *
  * The in-page cap is duplicated by a Node-side guard: if the in-page promise never
  * settles at all -- a wedged renderer, a page that swaps its own timers out -- the caller
  * must still get an answer inside its budget rather than hanging to the 15s context
- * default (R2).
+ * default (R2). Both fit inside `allowanceMs`, so this function never overruns what it
+ * was given.
  */
 async function quietWindow(
   page: Page,
   quietMs: number,
-  capMs: number,
+  allowanceMs: number,
 ): Promise<'quiet' | 'cap' | 'abandoned' | 'error'> {
+  const capMs = Math.max(1, allowanceMs - GUARD_SLACK_MS);
   let guardTimer: ReturnType<typeof setTimeout> | undefined;
   const guard = new Promise<'abandoned'>((resolve) => {
-    guardTimer = setTimeout(() => resolve('abandoned'), capMs + 500);
+    guardTimer = setTimeout(() => resolve('abandoned'), Math.max(1, allowanceMs));
   });
 
   const observed = page
@@ -139,20 +148,33 @@ export async function settle(page: Page, quietMs = 500, budgetMs = 8000): Promis
   page.on('requestfailed', closed);
 
   try {
-    await page.waitForLoadState('domcontentloaded');
-
-    // The network phase gets at most half the budget, and never the share the mutation
-    // phase needs: a page that never reaches idle -- a websocket, a long poll, a periodic
-    // beacon -- must still be harvested at a DOM-quiet instant rather than at whatever
-    // moment the budget happened to expire.
-    const reserve = quietMs * 3;
-    const networkMs = Math.max(quietMs, Math.min(Math.floor(budgetMs / 2), remaining() - reserve));
-    let networkIdle = true;
+    // Inside the budget like every other phase. Every caller in this repo `goto`s with
+    // `waitUntil: 'domcontentloaded'` first, so in practice this returns immediately --
+    // but on a page that has committed without reaching DCL it would otherwise run on the
+    // context default (15s) and reject out of `settle` as an outcome `SettleResult`
+    // cannot express, which would make the R2 claim below false.
     try {
-      // A zero timeout means "no timeout" to Playwright, so the floor is not cosmetic.
-      await page.waitForLoadState('networkidle', { timeout: Math.max(1, networkMs) });
+      await page.waitForLoadState('domcontentloaded', { timeout: Math.max(1, remaining()) });
     } catch {
-      networkIdle = false;
+      return done(remaining() <= 0 ? 'budget' : 'error');
+    }
+
+    // The network phase gets at most half the budget, and never more than what is left
+    // once the other half is reserved for the mutation phase. Both clamps are on the same
+    // quantity, so no combination of `quietMs` and `budgetMs` can hand the network phase
+    // more than half -- and a page that never reaches idle (a websocket, a long poll, a
+    // periodic beacon) is still harvested at a DOM-quiet instant rather than at whatever
+    // moment the budget happened to expire.
+    const half = Math.floor(budgetMs / 2);
+    const networkMs = Math.min(half, Math.max(0, remaining() - half));
+    let networkIdle = false;
+    if (networkMs > 0) {
+      try {
+        await page.waitForLoadState('networkidle', { timeout: networkMs });
+        networkIdle = true;
+      } catch {
+        networkIdle = false;
+      }
     }
 
     for (let round = 0; round < MAX_ROUNDS; round++) {

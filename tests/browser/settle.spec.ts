@@ -188,3 +188,72 @@ test('harvest of an XHR-hydrated page is identical across 20 runs with the laten
 
   expect(new Set(counts).size).toBe(1);
 });
+
+// ---------------------------------------------------------------------------
+// R2 -- the total budget is a bound for ANY argument pair a caller can pass, not just
+// the ones the repo happens to use. A page that neither reaches network-idle (a request
+// the route never answers) nor goes DOM-quiet forces both phases to spend their full
+// share, so the wall clock here is the bound actually being enforced.
+// ---------------------------------------------------------------------------
+
+function stuckAndNoisy() {
+  return async (route: Route) => {
+    const path = new URL(route.request().url()).pathname;
+    // Never fulfilled and never aborted, so the network can never go idle.
+    if (path === '/stream') return new Promise<void>(() => {});
+    return route.fulfill({
+      contentType: 'text/html',
+      body: `<!DOCTYPE html><html><body><main><h1>Noisy</h1><div id="a"></div></main><script>
+        fetch('/stream');
+        setInterval(function(){document.getElementById('a').textContent=String(Math.random());}, 20);
+      </script></body></html>`,
+    });
+  };
+}
+
+for (const [quietMs, budgetMs] of [[500, 8000], [500, 1500], [2000, 1000], [5000, 3000]] as const) {
+  test(`settle stays inside a ${budgetMs}ms budget with quietMs=${quietMs}`, async ({ page }) => {
+    test.setTimeout(60_000);
+    await page.route('**/*', stuckAndNoisy());
+    await page.goto('https://stuck.test/', { waitUntil: 'domcontentloaded' });
+
+    const start = Date.now();
+    const result = await settle(page, quietMs, budgetMs);
+    const wall = Date.now() - start;
+
+    // The bound is the property under test, so it is asserted before anything about the
+    // shape of the result: a RED that dies on an earlier line proves nothing about this.
+    expect(wall).toBeLessThan(budgetMs + 400);
+    expect(result.elapsedMs).toBeLessThan(budgetMs + 400);
+    expect(result.stable).toBe(false);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// R2 again -- the wait for `domcontentloaded` is inside the budget too. A
+// parser-blocking script that is never served holds DCL open, and `waitUntil: 'commit'`
+// hands back a page that has committed but not reached DCL: a state the crawl's own
+// `goto` never leaves behind, but one a caller can.
+// ---------------------------------------------------------------------------
+
+test('settle bounds its wait for domcontentloaded rather than running on the context default', async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.route('**/*', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === '/blocking.js') return new Promise<void>(() => {});
+    return route.fulfill({
+      contentType: 'text/html',
+      body: '<!DOCTYPE html><html><head><script src="/blocking.js"></script></head>'
+        + '<body><main><h1>Never parsed</h1></main></body></html>',
+    });
+  });
+  await page.goto('https://blocked.test/', { waitUntil: 'commit' });
+
+  const start = Date.now();
+  const result = await settle(page, 300, 1000);
+  const wall = Date.now() - start;
+
+  expect(wall).toBeLessThan(2000);
+  expect(result.reason).toBe('budget');
+  expect(result.stable).toBe(false);
+});
