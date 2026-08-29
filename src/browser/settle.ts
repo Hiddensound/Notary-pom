@@ -98,7 +98,19 @@ async function quietWindow(
             clearTimeout(hardStop);
             resolve(why);
           };
+          // The Node side gives up on this promise if it never settles, and the caller
+          // then harvests this very document -- so the observer must be able to retire
+          // without being told. It cannot rely on its own timers to do that, because a
+          // page whose timers still work would have resolved through `finish` already.
+          // Checking the clock on each callback costs nothing and disconnects on the next
+          // mutation; a document that never mutates again leaves an observer that never
+          // runs, which is the harmless half of the problem.
+          const deadline = Date.now() + cap;
           observer = new MutationObserver(() => {
+            if (Date.now() > deadline) {
+              finish('cap');
+              return;
+            }
             clearTimeout(timer);
             timer = setTimeout(() => finish('quiet'), quiet);
           });

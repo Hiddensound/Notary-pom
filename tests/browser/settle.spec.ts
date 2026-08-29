@@ -191,6 +191,54 @@ test('settle leaves no timer armed in the page when it gives up on a never-quiet
 });
 
 // ---------------------------------------------------------------------------
+// The abandoned path must not leave a live observer behind.
+//
+// When the in-page promise never settles -- here because the page's `setTimeout` has been
+// replaced with a no-op, so neither the quiet timer nor the in-page cap can ever fire --
+// the Node side stops waiting and returns. The observer it installed used to stay
+// connected for the rest of the document's life, and `crawl.ts` runs `harvest` on that
+// same document immediately afterwards, so it was a live document-wide observer with
+// `attributes: true` running through the harvest (review A-6).
+//
+// The page shims `MutationObserver` to count connected instances, which is the only way
+// to see this from outside.
+// ---------------------------------------------------------------------------
+
+test('settle disconnects its observer even when the in-page promise is abandoned', async ({ page }) => {
+  await page.route('**/*', (route) => route.fulfill({
+    contentType: 'text/html',
+    body: `<!DOCTYPE html><html><body><main><h1>Wedged</h1><div id="a"></div></main><script>
+      window.__mo = { live: 0 };
+      var Real = window.MutationObserver;
+      window.MutationObserver = function(cb){
+        var inner = new Real(cb), connected = false;
+        return {
+          observe: function(t, o){ if (!connected) { connected = true; window.__mo.live++; }
+                                   return inner.observe(t, o); },
+          disconnect: function(){ if (connected) { connected = false; window.__mo.live--; }
+                                  return inner.disconnect(); },
+          takeRecords: function(){ return inner.takeRecords(); }
+        };
+      };
+      // setInterval still works, so the page keeps mutating; setTimeout does not, so
+      // nothing inside settle's in-page promise can ever resolve it.
+      setInterval(function(){document.getElementById('a').textContent=String(Math.random());}, 20);
+      window.setTimeout = function(){ return 0; };
+    </script></body></html>`,
+  }));
+  await page.goto('https://wedged.test/', { waitUntil: 'domcontentloaded' });
+
+  const result = await settle(page, 300, 1500);
+  // The observer disconnects itself on its next callback once it has outlived its cap,
+  // so give the page's own interval a couple of ticks to deliver one.
+  await page.waitForTimeout(200);
+  const live = await page.evaluate(() => (window as unknown as { __mo: { live: number } }).__mo.live);
+
+  expect(live).toBe(0);
+  expect(result.stable).toBe(false);
+});
+
+// ---------------------------------------------------------------------------
 // (c) Plain static page -- the control for R4, and the shape the caller branches on.
 // ---------------------------------------------------------------------------
 
