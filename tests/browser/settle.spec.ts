@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import type { Route } from '@playwright/test';
 import { settle } from '../../src/browser/settle.js';
+import type { SettleResult } from '../../src/browser/settle.js';
 import { harvest } from '../../src/harvest/harvest.js';
 
 // The shell every SPA fixture below starts from: what the server sends, before any
@@ -314,9 +315,12 @@ test('harvest of an XHR-hydrated page is identical across 20 runs with the reque
   for (let i = 0; i < 20; i++) {
     defer = 900 + i * 20; // 900..1280ms after domcontentloaded
     await page.goto('https://spa.test/', { waitUntil: 'domcontentloaded' });
-    const result = await settle(page);
-    reported.push(`${result.stable}/${result.reason}`);
+    // Typed as possibly absent purely so this diagnostic line cannot throw against a
+    // `settle` that returns void. The distribution below is the property under test, and
+    // a RED that dies here would say nothing about it (review A-5, applied to this test).
+    const result: SettleResult | undefined = await settle(page);
     counts.push((await harvest(page, 'data-testid')).length);
+    reported.push(result ? `${result.stable}/${result.reason}` : 'void (no result type)');
   }
 
   const distribution: Record<string, number> = {};
