@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import robotsParserImport from 'robots-parser';
-import { shouldFollow, type Robots } from '../../src/crawl/crawl.js';
+import { formatUnstable, shouldFollow, type Robots, type UnstablePage } from '../../src/crawl/crawl.js';
 import { withDefaults } from '../../src/config.js';
 
 // Same cast crawl.ts itself needs -- see the comment there on robots-parser's types.
@@ -37,5 +37,34 @@ describe('shouldFollow', () => {
     expect(shouldFollow({ href: `${origin}/private/x`, text: '' }, origin, excluding, null)).toBeNull();
     expect(shouldFollow({ href: `${origin}/logout`, text: 'Log out' }, origin, config, null)).toBeNull();
     expect(shouldFollow({ href: `${origin}/ok`, text: 'ok' }, origin, config, null)).toBe(`${origin}/ok`);
+  });
+});
+
+describe('formatUnstable', () => {
+  const sampled: UnstablePage[] = [
+    { url: 'https://shop.test/', phase: 'discover', reason: 'mutation', elapsedMs: 8012 },
+    { url: 'https://shop.test/live', phase: 'harvest', reason: 'network', elapsedMs: 8004 },
+  ];
+
+  it('says nothing at all when every page held still', () => {
+    expect(formatUnstable([])).toBe('');
+  });
+
+  it('names each page, which visit it was, and why the wait ended', () => {
+    const out = formatUnstable(sampled);
+    expect(out).toContain('2 page loads were sampled before the page stabilised');
+    expect(out).toContain('https://shop.test/ (discover, 8012ms): the DOM never stopped changing.');
+    expect(out).toContain(
+      'https://shop.test/live (harvest, 8004ms): the network never went idle, '
+      + 'so content may still have been arriving.');
+    // The point of the warning is that spurious drift has an explanation, so it has to
+    // say so rather than leaving the reader to suspect the site.
+    expect(out).toContain('may');
+    expect(out).toContain('drift');
+  });
+
+  it('reads correctly for a single page', () => {
+    expect(formatUnstable(sampled.slice(0, 1)))
+      .toContain('1 page load was sampled before the page stabilised');
   });
 });
