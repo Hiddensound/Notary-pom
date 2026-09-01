@@ -6,7 +6,7 @@ import type { Notebook, PageIR, PomBuilderConfig, RouteGroup } from '../types.js
 import { createContext } from '../browser/context.js';
 import { settle } from '../browser/settle.js';
 import type { UnstableReason } from '../browser/settle.js';
-import { LoginRedirectError, looksLikeLogin } from '../browser/guard.js';
+import { LoginRedirectError, OffOriginError, looksLikeLogin } from '../browser/guard.js';
 import { harvest } from '../harvest/harvest.js';
 import { resolveElements } from '../resolve/resolve.js';
 import { mergeRouteGroups, templateRoutes } from '../url/routeTemplate.js';
@@ -175,6 +175,15 @@ export async function validateGroups(
       await page.goto(url, { waitUntil: 'domcontentloaded' });
       await settleAt(page, 'validate', report);
       if (await looksLikeLogin(page, config)) throw new LoginRedirectError(page.url());
+      // Deliberately no origin check here (unlike the two navigation sites in
+      // `crawlSite` below) -- see the ruling in the Wave 4 remediation plan. An
+      // off-origin sample is a strict subset of "the two samples disagree": the
+      // structural-fingerprint comparison just below will essentially always disagree
+      // when one sample landed on a different site's DOM, so the existing
+      // fallback-to-literal-routes path already contains the damage. The one case that
+      // actually matters -- pass 2 harvesting a chosen representative that turns out to
+      // be off-origin -- is caught by the origin check in the harvest loop regardless of
+      // what this function decided. Not an oversight.
       prints.push(structuralFingerprint(await page.locator('body').ariaSnapshot()));
     }
 
@@ -248,6 +257,16 @@ export async function crawlSite(
         throw new LoginRedirectError(page.url());
       }
 
+      // A same-origin URL can 302 (or client-redirect) to a consent screen,
+      // interstitial, or geo-gate on someone else's domain. `shouldFollow` only ever
+      // filtered the *candidate link* before this navigation ran -- it says nothing
+      // about where the navigation actually landed. That landing is not a page of the
+      // site under test: skip it entirely, rather than pushing it (under the requested
+      // URL's own name) onto `discovered` or harvesting links from a DOM that belongs
+      // to a different site. Other queued same-origin URLs may still be perfectly fine,
+      // so this does not abort the crawl -- it just contributes nothing from this URL.
+      if (new URL(page.url()).origin !== origin) continue;
+
       discovered.push(url);
       if (depth >= config.maxDepth) continue;
 
@@ -273,6 +292,16 @@ export async function crawlSite(
 
       if (await looksLikeLogin(page, config)) {
         throw new LoginRedirectError(page.url());
+      }
+
+      // Unlike pass 1, there is no fallback here: `group.representativeUrl` was
+      // specifically chosen to represent this route template, and if harvesting it
+      // lands off-origin the notebook has no other candidate to try for this route.
+      // Abort loudly -- an off-origin landing is not necessarily a *login* page (a
+      // consent screen or geo-gate isn't), so this is a distinct diagnosis from
+      // LoginRedirectError, not a duplicate of it.
+      if (new URL(page.url()).origin !== origin) {
+        throw new OffOriginError(origin, page.url());
       }
 
       const snapshot = await page.locator('body').ariaSnapshot();
