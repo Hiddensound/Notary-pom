@@ -4,7 +4,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { writeGenerated } from '../../src/io/writeOutput.js';
 import { readNotebook, writeNotebook } from '../../src/io/notebookStore.js';
-import type { Notebook } from '../../src/types.js';
+import type { ElementRecord, Notebook } from '../../src/types.js';
+
+const observedRecord: ElementRecord = {
+  tag: 'button', role: 'button', accessibleName: 'Go', testId: 'cta', domId: null,
+  ariaLabel: null, placeholder: null, labelText: null, altText: null, title: null,
+  text: 'Go', landmark: 'main', domPath: 'body > button:nth-child(1)', structureKey: 'BODY>BUTTON',
+  visible: true, kind: 'interactive',
+};
 
 const nb: Notebook = {
   version: '2', site: 'https://s.test', generatedAt: '2026-01-01T00:00:00Z',
@@ -14,8 +21,11 @@ const nb: Notebook = {
     elements: [{
       id: 'el_1', name: 'ctaButton', nameSource: 'deterministic', kind: 'interactive',
       role: 'button', accessibleName: 'Go', group: 'main', status: 'resolved',
-      locator: { scope: null, fragile: false, candidate: { strategy: 'testId', value: 'cta' } },
-      rejected: [], observed: {} as never, weak: false,
+      locator: {
+        scope: null, fragile: false,
+        candidate: { strategy: 'testId', value: 'cta', attribute: 'data-testid' },
+      },
+      rejected: [], observed: observedRecord, weak: false,
     }],
   }],
 };
@@ -103,5 +113,58 @@ describe('notebookStore', () => {
     const first = await readFile(join(dir, 'notebook.json'), 'utf8');
     await writeNotebook(dir, nb);
     expect(await readFile(join(dir, 'notebook.json'), 'utf8')).toBe(first);
+  });
+
+  // Beyond the version gate, readNotebook used to be JSON.parse plus a blind type cast --
+  // no structural validation at all -- so a hand-edited or badly merge-resolved notebook.json
+  // was accepted and handed straight to the emitters, which failed wherever they happened
+  // to dereference the missing/wrong field, with no message pointing at the actual
+  // corruption. These pin the schema this fix adds.
+
+  it('rejects a locator strategy that is not a real LocatorCandidate variant', async () => {
+    await writeNotebook(dir, nb);
+    const corrupted = {
+      ...nb,
+      pages: [{
+        ...nb.pages[0],
+        elements: [{
+          ...nb.pages[0].elements[0],
+          locator: {
+            scope: null, fragile: false,
+            candidate: { strategy: 'xpath', value: '//button' },
+          },
+        }],
+      }],
+    };
+    await writeFile(join(dir, 'notebook.json'), JSON.stringify(corrupted, null, 2) + '\n');
+    await expect(readNotebook(dir)).rejects.toThrow(/does not match the shape/);
+  });
+
+  it('rejects a className that is not a valid identifier', async () => {
+    await writeNotebook(dir, nb);
+    for (const badName of ['Home Page', '1HomePage']) {
+      const corrupted = {
+        ...nb,
+        pages: [{ ...nb.pages[0], className: badName }],
+      };
+      await writeFile(join(dir, 'notebook.json'), JSON.stringify(corrupted, null, 2) + '\n');
+      await expect(readNotebook(dir), `className ${JSON.stringify(badName)}`)
+        .rejects.toThrow(/does not match the shape/);
+    }
+  });
+
+  it('rejects a notebook missing a required field', async () => {
+    await writeNotebook(dir, nb);
+    const corrupted = JSON.parse(await readFile(join(dir, 'notebook.json'), 'utf8'));
+    delete corrupted.pages[0].pageFingerprint;
+    await writeFile(join(dir, 'notebook.json'), JSON.stringify(corrupted, null, 2) + '\n');
+    await expect(readNotebook(dir)).rejects.toThrow(/does not match the shape/);
+    await expect(readNotebook(dir)).rejects.toThrow(/pageFingerprint/);
+  });
+
+  it('still reads a well-formed v2 notebook (regression guard: the schema is not stricter than reality)', async () => {
+    await writeNotebook(dir, nb);
+    const read = await readNotebook(dir);
+    expect(read).toEqual(nb);
   });
 });
