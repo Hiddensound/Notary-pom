@@ -33,7 +33,18 @@ describe('isDenied', () => {
     expect(isDenied('/product/red-mug', 'Red Mug')).toBe(false);
   });
 
+  // The discriminating case: "delete" in "undeleted" is not bounded by a non-alphanumeric
+  // character on the left ('n' precedes it), so the correct, boundary-aware answer is
+  // `false` -- while a naive `target.includes('delete')` would wrongly return `true` here,
+  // since "delete" really is a substring of "undeleted". `deletable-art` below does not
+  // discriminate the two implementations: "deletable".includes("delete") is already false
+  // (character 6 is 'a', not 'e'), so a naive substring check would also correctly say
+  // `false` there, for an unrelated reason.
   it('does not deny on a substring inside an unrelated word', () => {
+    expect(isDenied('/undeleted', 'Undeleted items')).toBe(false);
+  });
+
+  it('does not deny on a substring inside an unrelated word (second example)', () => {
     expect(isDenied('/collections/deletable-art', 'Deletable Art')).toBe(false);
   });
 
