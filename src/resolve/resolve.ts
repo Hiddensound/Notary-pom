@@ -104,7 +104,13 @@ async function adjudicate(
       // against the reference site, produced an identical winner and status for all 123
       // elements -- its only effect on the notebook was two extra `rejected` entries
       // recording the wasted attempts (139 -> 141).
-      if (first.reason === 'ambiguous' && record.landmark) {
+      // A `css`-strategy candidate's value is `${parentPath(domPath)} > ${tag}` (R7): an
+      // absolute path rooted at `body`, per `buildCandidates`. Scoping it to a landmark
+      // binds it as `page.getByRole(landmark).locator('body > ...')`, and a landmark's
+      // subtree never has a `<body>` descendant -- so this retry can never match anything.
+      // It would still cost a round-trip and always land a second, redundant `rejected`
+      // entry that documents nothing useful, so css-strategy candidates skip it.
+      if (first.reason === 'ambiguous' && record.landmark && sc.candidate.strategy !== 'css') {
         const scoped = scopeTo(sc, record.landmark);
         const second = await verify(page, scoped, expected);
         if (second.ok) return { winner: scoped, rejected };

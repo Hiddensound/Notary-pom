@@ -72,3 +72,26 @@ test('a page with no colliding elements keeps bare, unsuffixed ids', async ({ pa
   const ir = (await resolveElements(page, await harvest(page, 'data-testid'), '/p')).elements;
   for (const e of ir) expect(e.id).toMatch(/^el_[0-9a-f]{12}$/);
 });
+
+// Two structurally-identical, unlabelled buttons: no testId, no accessible name (empty
+// content, no aria-label/alt/title), so `buildCandidates` has nothing to offer but the
+// css fallback -- and both buttons share the same parent, so the css value (bare tag
+// under the parent's path, no nth-child on the target itself) matches both and is
+// ambiguous. This is the one candidate the landmark retry can never rescue (its value is
+// an absolute path rooted at `body`, which is never a descendant of the landmark), so it
+// must not be retried: each element's `rejected` should carry exactly one entry, not two.
+test('a css-strategy ambiguity inside a landmark is not retried', async ({ page }) => {
+  await page.setContent(
+    '<nav><button style="width:20px;height:20px"></button>'
+    + '<button style="width:20px;height:20px"></button></nav>',
+  );
+  const ir = (await resolveElements(page, await harvest(page, 'data-testid'), '/p')).elements;
+  expect(ir).toHaveLength(2);
+  for (const e of ir) {
+    expect(e.status).toBe('unresolved');
+    expect(e.rejected).toHaveLength(1);
+    expect(e.rejected[0].reason).toBe('ambiguous');
+    expect(e.rejected[0].scoped.candidate.strategy).toBe('css');
+    expect(e.rejected[0].scoped.scope).toBeNull();
+  }
+});
