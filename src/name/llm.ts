@@ -23,6 +23,58 @@ export function selectWeak(elements: IRElement[]): IRElement[] {
   return elements.filter((e) => e.weak);
 }
 
+// `camelise` (src/name/deterministic.ts) strips every non-ASCII character. On a site whose
+// accessible names are Japanese, Cyrillic, Greek, Hebrew or Arabic, every one of those names
+// reduces to the empty string and `deterministicName` falls through to its role/tag base --
+// `weak: true`, uniquified into meaningless names like `button1`, `link2`. A handful of weak
+// names on an otherwise healthy page is normal (decorative icons, unlabelled dividers), so
+// the threshold below is deliberately a majority of a page's elements, not "any weak name at
+// all" -- chosen as a round number that separates "a few rough edges" from "naming broke
+// wholesale" without being tuned against one specific fixture.
+const WEAK_NAME_WARN_THRESHOLD = 0.5;
+
+// How many pages the warning names before summarising the rest, mirroring `formatUnstable`'s
+// `MAX_LISTED` in src/crawl/crawl.ts.
+const MAX_LISTED_PAGES = 10;
+
+export interface WeakNamingPage {
+  routeTemplate: string;
+  weakCount: number;
+  totalCount: number;
+}
+
+// Exported separately from `formatWeakNaming` so callers that want the structured data
+// (rather than the formatted warning string) can get it without parsing prose.
+export function weakNamingReport(nb: Notebook): WeakNamingPage[] {
+  return nb.pages
+    .map((p) => ({
+      routeTemplate: p.routeTemplate,
+      weakCount: p.elements.filter((e) => e.weak).length,
+      totalCount: p.elements.length,
+    }))
+    .filter((p) => p.totalCount > 0 && p.weakCount / p.totalCount > WEAK_NAME_WARN_THRESHOLD);
+}
+
+// Same shape as `formatUnstable`/`UnstableReporter` in src/crawl/crawl.ts: a pure formatting
+// function the CLI and MCP callers `console.warn` when it returns non-empty, not a new
+// reporting mechanism. Detect-and-warn only -- this does not transliterate or otherwise fix
+// the names; see the finding this implements for why that is a deliberately deferred,
+// separately-scoped follow-up.
+export function formatWeakNaming(nb: Notebook): string {
+  const pages = weakNamingReport(nb);
+  if (pages.length === 0) return '';
+  const lines = pages.slice(0, MAX_LISTED_PAGES).map(
+    (p) => `  ${p.routeTemplate}: ${p.weakCount}/${p.totalCount} elements named from a role/tag fallback.`);
+  if (pages.length > MAX_LISTED_PAGES) lines.push(`  ... and ${pages.length - MAX_LISTED_PAGES} more.`);
+  return `Warning: ${pages.length} page${pages.length === 1 ? '' : 's'} had most of their elements named `
+    + 'from a role/tag fallback rather than a real accessible name. The usual cause is a '
+    + 'non-Latin-script site (Japanese, Cyrillic, Greek, Hebrew, Arabic, ...): deterministic naming '
+    + 'strips non-ASCII characters, so names collapse to `button1`, `link2` and similar. The '
+    + 'generated page objects still work, but their member names will not be meaningful; set '
+    + 'ANTHROPIC_API_KEY so `pombuilder crawl` can refine them with an LLM.\n'
+    + lines.join('\n');
+}
+
 export async function refineNames(weak: IRElement[], cache: NameCache, call: LlmCall): Promise<NameCache> {
   const pending = weak.filter((e) => !(e.id in cache));
   if (pending.length === 0) return { ...cache };

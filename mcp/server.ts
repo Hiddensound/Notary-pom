@@ -11,7 +11,7 @@ import { readNotebook, writeNotebook } from '../src/io/notebookStore.js';
 import { writeGenerated } from '../src/io/writeOutput.js';
 import { formatDrift } from '../src/diff/notebook.js';
 import { refinedDiff } from '../src/diff/run.js';
-import { refineNotebookNames } from '../src/name/llm.js';
+import { formatWeakNaming, refineNotebookNames } from '../src/name/llm.js';
 
 export const TOOL_NAMES = ['pombuilder_crawl', 'pombuilder_generate', 'pombuilder_diff'] as const;
 
@@ -38,8 +38,12 @@ export function buildServer(): McpServer {
         const unresolved = nb.pages.reduce(
           (n, p) => n + p.elements.filter((e) => e.status === 'unresolved').length, 0);
         const warning = unstable.length ? `\n\n${formatUnstable(unstable)}` : '';
+        // Checked against `nb` as first built, before `refineNotebookNames` -- see the
+        // matching comment in src/cli.ts's `crawl` action for why.
+        const weakNaming = formatWeakNaming(nb);
+        const weakWarning = weakNaming ? `\n\n${weakNaming}` : '';
         return text(
-          `Crawled ${nb.pages.length} routes. ${unresolved} elements unresolved.${warning}`);
+          `Crawled ${nb.pages.length} routes. ${unresolved} elements unresolved.${warning}${weakWarning}`);
       } finally {
         await browser.close();
       }

@@ -10,7 +10,7 @@ import { readNotebook, writeNotebook } from './io/notebookStore.js';
 import { writeGenerated } from './io/writeOutput.js';
 import { formatDrift } from './diff/notebook.js';
 import { refinedDiff } from './diff/run.js';
-import { refineNotebookNames } from './name/llm.js';
+import { formatWeakNaming, refineNotebookNames } from './name/llm.js';
 
 const program = new Command();
 program.name('pombuilder').description('Generate verified Playwright page objects').version('0.1.0');
@@ -34,6 +34,12 @@ program.command('crawl').argument('[url]').option('-c, --config <path>')
       // notebook on every site including the stable ones, so the crawl says it out loud
       // instead. See the README for what that does and does not cover.
       if (unstable.length) console.warn(formatUnstable(unstable));
+      // Checked against the notebook as first built, before `refineNotebookNames` -- that
+      // step only runs (and only fixes some elements) when `ANTHROPIC_API_KEY` is set, so
+      // gating the warning on the post-refinement notebook would hide the exact sites this
+      // exists to flag when a key happens to be configured too.
+      const weakWarning = formatWeakNaming(nb);
+      if (weakWarning) console.warn(weakWarning);
     } finally {
       await browser.close();
     }

@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { deterministicName } from '../../src/name/deterministic.js';
 import { resolveCollisions } from '../../src/name/collisions.js';
-import type { ElementRecord } from '../../src/types.js';
+import { formatWeakNaming } from '../../src/name/llm.js';
+import type { ElementRecord, IRElement, Notebook, PageIR } from '../../src/types.js';
 
 const rec = (over: Partial<ElementRecord>): ElementRecord => ({
   tag: 'button', role: 'button', accessibleName: null, testId: null, domId: null,
@@ -67,5 +68,60 @@ describe('resolveCollisions', () => {
       { record: rec({ accessibleName: 'B' }), name: 'bButton', weak: false },
     ]);
     expect(out.map((e) => e.name)).toEqual(['aButton', 'bButton']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// formatWeakNaming: detects a page whose deterministic naming degraded to a
+// role/tag fallback for most of its elements -- the profile of a non-Latin-script
+// site running through `camelise`'s ASCII-only stripping (see the comment above
+// `WEAK_NAME_WARN_THRESHOLD` in src/name/llm.ts). Detect-and-warn only: this does
+// not transliterate anything.
+// ---------------------------------------------------------------------------
+
+const el = (id: string, weak: boolean): IRElement => ({
+  id, name: weak ? `button${id}` : `submit${id}Button`, nameSource: 'deterministic',
+  kind: 'interactive', role: 'button', accessibleName: weak ? null : `Submit ${id}`,
+  group: null, status: 'resolved',
+  locator: { scope: null, fragile: false, candidate: { strategy: 'testId', value: id } },
+  rejected: [], observed: rec({}), weak,
+});
+
+const page = (routeTemplate: string, elements: IRElement[]): PageIR => ({
+  routeTemplate, representativeUrl: `https://s.test${routeTemplate}`, sampleUrls: [],
+  className: 'P', pageFingerprint: 'f', elements, collections: [],
+});
+
+const notebook = (pages: PageIR[]): Notebook =>
+  ({ version: '2', site: 'https://s.test', generatedAt: 'now', pages });
+
+describe('formatWeakNaming', () => {
+  it('warns when every element on a page fell back to a role/tag name', () => {
+    const nb = notebook([page('/', [el('a', true), el('b', true), el('c', true)])]);
+    const warning = formatWeakNaming(nb);
+    expect(warning).not.toBe('');
+    // Concrete and actionable: names the fraction, the likely cause, and a remedy --
+    // not just "some names are weak".
+    expect(warning).toContain('3/3');
+    expect(warning).toContain('role/tag fallback');
+    expect(warning).toContain('non-Latin-script');
+    expect(warning).toContain('ANTHROPIC_API_KEY');
+  });
+
+  it('does not warn when only a minority of a page fell back', () => {
+    const nb = notebook([page('/', [el('a', true), el('b', false), el('c', false)])]);
+    expect(formatWeakNaming(nb)).toBe('');
+  });
+
+  it('does not warn on a page with no elements', () => {
+    const nb = notebook([page('/empty', [])]);
+    expect(formatWeakNaming(nb)).toBe('');
+  });
+
+  it('names the affected route and truncates past ten pages', () => {
+    const pages = Array.from({ length: 12 }, (_, i) => page(`/p${i}`, [el(`${i}a`, true), el(`${i}b`, true)]));
+    const warning = formatWeakNaming(notebook(pages));
+    expect(warning).toContain('/p0');
+    expect(warning).toContain('and 2 more');
   });
 });
