@@ -11,7 +11,7 @@ import type { IRElement, PageIR } from '../types.js';
 import { RESERVED_WORDS } from './deterministic.js';
 import { compareStrings } from '../util/order.js';
 
-export type ActionVerb = 'click' | 'fill' | 'check';
+export type ActionVerb = 'click' | 'fill' | 'check' | 'select';
 
 const ROLE_SUFFIX_RE = /(Button|Link|Input|Select|Checkbox|Radio|Tab|MenuItem|Option)$/;
 
@@ -49,7 +49,8 @@ export function actionNameFor(e: IRElement): ActionName | null {
   const verb: ActionVerb =
     e.role === 'textbox' || e.role === 'searchbox' ? 'fill'
       : e.role === 'checkbox' || e.role === 'radio' ? 'check'
-        : 'click';
+        : e.role === 'combobox' || e.role === 'listbox' ? 'select'
+          : 'click';
   return { verb, stem, full };
 }
 

@@ -13,6 +13,8 @@ function renderAction(a: PlannedAction): string {
       return `  async ${a.method}(value: string): Promise<void> { await ${target}.fill(value); }`;
     case 'check':
       return `  async ${a.method}(): Promise<void> { await ${target}.check(); }`;
+    case 'select':
+      return `  async ${a.method}(value: string): Promise<void> { await ${target}.selectOption(value); }`;
     case 'click':
       return `  async ${a.method}(): Promise<void> { await ${target}.click(); }`;
   }

@@ -91,6 +91,25 @@ describe('emitBase fragile marker', () => {
   });
 });
 
+describe('emitBase select action', () => {
+  const comboboxPage: PageIR = {
+    ...page,
+    elements: [
+      el({ id: 'el_1', name: 'countrySelect', role: 'combobox',
+           locator: { scope: null, fragile: false, candidate: { strategy: 'testId', value: 'country' } } }),
+    ],
+    collections: [],
+  };
+  const src = emitBase(comboboxPage);
+
+  it('calls selectOption(value), not click(), for a combobox', () => {
+    expect(src).toContain(
+      'async selectCountry(value: string): Promise<void> { await this.countrySelect.selectOption(value); }',
+    );
+    expect(src).not.toContain('clickCountry');
+  });
+});
+
 describe('emitSubclass', () => {
   it('extends the base and carries no banner', () => {
     const src = emitSubclass(page);

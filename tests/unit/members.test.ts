@@ -151,6 +151,8 @@ describe('actionNameFor', () => {
     ['searchbox', 'fill'],
     ['checkbox', 'check'],
     ['radio', 'check'],
+    ['combobox', 'select'],
+    ['listbox', 'select'],
     ['button', 'click'],
     ['link', 'click'],
     [null, 'click'],
