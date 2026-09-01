@@ -1,6 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { diffNotebooks, formatDrift } from '../../src/diff/notebook.js';
-import type { IRElement, Notebook, PageIR } from '../../src/types.js';
+import { refinedDiff } from '../../src/diff/run.js';
+import type { IRElement, Notebook, PageIR, PomBuilderConfig } from '../../src/types.js';
 
 const el = (id: string, over: Partial<IRElement> = {}): IRElement => ({
   id, name: 'someButton', nameSource: 'deterministic', kind: 'interactive',
@@ -94,5 +98,53 @@ describe('diffNotebooks', () => {
 describe('formatDrift', () => {
   it('says so when nothing changed', () => {
     expect(formatDrift({ addedPages: [], removedPages: [], elements: [] })).toBe('No drift detected.');
+  });
+});
+
+// `crawl` stores LLM-refined names, but a bare `diffNotebooks(previous, next)` compared
+// that refined `previous` against a freshly-crawled, never-refined `next` -- every
+// refined element reported `renamed` on every diff run forever, with nothing having
+// changed. `refinedDiff` closes that gap by refining `next` first, reusing `names.json`
+// so an already-cached element costs no LLM call.
+describe('refinedDiff', () => {
+  let dir: string;
+  const priorKey = process.env.ANTHROPIC_API_KEY;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'pb-refined-diff-'));
+  });
+
+  afterEach(async () => {
+    if (priorKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = priorKey;
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const config = () => ({ irDir: dir } as unknown as PomBuilderConfig);
+
+  it('reports no rename when the fresh crawl refines to the same cached name as the stored notebook', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key';
+    await writeFile(join(dir, 'names.json'), JSON.stringify({ a: 'submitOrderButton' }), 'utf8');
+
+    const previous = nb([pg([el('a', { name: 'submitOrderButton', nameSource: 'llm', accessibleName: null })])]);
+    const next = nb([pg([el('a', { name: 'button', nameSource: 'deterministic', accessibleName: null })])]);
+
+    const r = await refinedDiff(previous, next, config());
+    expect(r.elements).toHaveLength(0);
+  });
+
+  it('behaves exactly like the old bare diffNotebooks call when ANTHROPIC_API_KEY is unset (regression guard)', async () => {
+    delete process.env.ANTHROPIC_API_KEY;
+
+    const previous = nb([pg([el('a', { name: 'submitOrderButton', nameSource: 'llm', accessibleName: null })])]);
+    const next = nb([pg([el('a', { name: 'button', nameSource: 'deterministic', accessibleName: null })])]);
+
+    const r = await refinedDiff(previous, next, config());
+    expect(r).toEqual(diffNotebooks(previous, next));
+    // And that shared behavior is still the pre-fix asymmetry the common no-key path keeps:
+    // a name difference is reported as a rename, since refinement never ran.
+    expect(r.elements).toEqual([
+      { page: '/p', id: 'a', name: 'button', change: 'renamed', detail: 'submitOrderButton -> button' },
+    ]);
   });
 });

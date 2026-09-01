@@ -9,7 +9,8 @@ import { crawlSite, formatUnstable } from '../src/crawl/crawl.js';
 import type { UnstablePage } from '../src/crawl/crawl.js';
 import { readNotebook, writeNotebook } from '../src/io/notebookStore.js';
 import { writeGenerated } from '../src/io/writeOutput.js';
-import { diffNotebooks, formatDrift } from '../src/diff/notebook.js';
+import { formatDrift } from '../src/diff/notebook.js';
+import { refinedDiff } from '../src/diff/run.js';
 import { refineNotebookNames } from '../src/name/llm.js';
 
 export const TOOL_NAMES = ['pombuilder_crawl', 'pombuilder_generate', 'pombuilder_diff'] as const;
@@ -62,7 +63,7 @@ export function buildServer(): McpServer {
         const unstable: UnstablePage[] = [];
         const next = await crawlSite(browser, config, undefined, (u) => unstable.push(u));
         const warning = unstable.length ? `\n\n${formatUnstable(unstable)}` : '';
-        return text(`${formatDrift(diffNotebooks(previous, next))}${warning}`);
+        return text(`${formatDrift(await refinedDiff(previous, next, config))}${warning}`);
       } finally {
         await browser.close();
       }

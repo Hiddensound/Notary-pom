@@ -10,7 +10,8 @@ import { crawlSite, formatUnstable } from './crawl/crawl.js';
 import type { UnstablePage } from './crawl/crawl.js';
 import { readNotebook, writeNotebook } from './io/notebookStore.js';
 import { writeGenerated } from './io/writeOutput.js';
-import { diffNotebooks, formatDrift } from './diff/notebook.js';
+import { formatDrift } from './diff/notebook.js';
+import { refinedDiff } from './diff/run.js';
 import { refineNotebookNames } from './name/llm.js';
 import type { PomBuilderConfig } from './types.js';
 
@@ -75,7 +76,7 @@ program.command('diff').argument('[url]').option('-c, --config <path>')
     try {
       const unstable: UnstablePage[] = [];
       const next = await crawlSite(browser, config, undefined, (u) => unstable.push(u));
-      console.log(formatDrift(diffNotebooks(previous, next)));
+      console.log(formatDrift(await refinedDiff(previous, next, config)));
       // Drift reported off an unstable sample is exactly the spurious drift this warning
       // exists to explain, so it belongs on the diff path as much as on the crawl path.
       if (unstable.length) console.warn(formatUnstable(unstable));
