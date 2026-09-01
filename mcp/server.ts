@@ -4,7 +4,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { chromium } from 'playwright';
-import { withDefaults } from '../src/config.js';
+import { loadConfig, withDefaults } from '../src/config.js';
 import { crawlSite, formatUnstable } from '../src/crawl/crawl.js';
 import type { UnstablePage } from '../src/crawl/crawl.js';
 import { readNotebook, writeNotebook } from '../src/io/notebookStore.js';
@@ -22,9 +22,14 @@ export function buildServer(): McpServer {
 
   server.tool('pombuilder_crawl',
     'Crawl a site and write the POMBuilder notebook of verified locators.',
-    { url: z.string().url(), irDir: z.string().optional(), maxPages: z.number().optional() },
-    async ({ url, irDir, maxPages }) => {
-      const config = withDefaults({ seed: url, irDir, maxPages });
+    {
+      url: z.string().url(),
+      irDir: z.string().optional(),
+      maxPages: z.number().optional(),
+      config: z.string().optional(),
+    },
+    async ({ url, irDir, maxPages, config: configPath }) => {
+      const config = await loadConfig(configPath, { seed: url, irDir, maxPages });
       const browser = await chromium.launch();
       try {
         const unstable: UnstablePage[] = [];
@@ -53,9 +58,9 @@ export function buildServer(): McpServer {
 
   server.tool('pombuilder_diff',
     'Re-crawl and report locator drift against the stored notebook.',
-    { url: z.string().url(), irDir: z.string().optional() },
-    async ({ url, irDir }) => {
-      const config = withDefaults({ seed: url, irDir });
+    { url: z.string().url(), irDir: z.string().optional(), config: z.string().optional() },
+    async ({ url, irDir, config: configPath }) => {
+      const config = await loadConfig(configPath, { seed: url, irDir });
       const previous = await readNotebook(config.irDir);
       if (!previous) return text('No stored notebook to compare against.');
       const browser = await chromium.launch();
