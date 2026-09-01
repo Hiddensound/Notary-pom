@@ -60,10 +60,17 @@ export function harvestInPage(testIdAttribute: string): ElementRecord[] {
   };
   const SECTIONED_LANDMARK: Record<string, string> = { HEADER: 'banner', FOOTER: 'contentinfo' };
 
+  // Rows verified against `kImplicitRoleByTagName` in the installed playwright-core
+  // (1.62.1) bundle, same transcription discipline as the landmark tables above. `SECTION`
+  // and `FORM` are handled separately in `roleOf` below -- Playwright only grants them
+  // `region`/`form` when the element carries an explicit accessible name, which is not
+  // something a flat tag map can express.
   const IMPLICIT_ROLE: Record<string, string> = {
     A: 'link', BUTTON: 'button', SELECT: 'combobox', TEXTAREA: 'textbox',
     IMG: 'img', SUMMARY: 'button', H1: 'heading', H2: 'heading', H3: 'heading',
     H4: 'heading', H5: 'heading', H6: 'heading',
+    SEARCH: 'search', ARTICLE: 'article', DETAILS: 'group', PROGRESS: 'progressbar',
+    METER: 'meter', OUTPUT: 'status',
   };
 
   const INPUT_ROLE: Record<string, string> = {
@@ -72,13 +79,63 @@ export function harvestInPage(testIdAttribute: string): ElementRecord[] {
     checkbox: 'checkbox', radio: 'radio', submit: 'button', button: 'button',
   };
 
+  // Playwright's `hasExplicitAccessibleName`: only `aria-label`/`aria-labelledby` count,
+  // never text content. This is what actually gates `SECTION`'s and `FORM`'s implicit
+  // role, so it has to be checked with this exact narrow rule and not this file's own
+  // broader `accessibleName()` helper (which falls back to text content and would
+  // over-grant `region`/`form` to any section or form that merely contains readable text).
+  function hasExplicitAccessibleName(el: Element): boolean {
+    return el.hasAttribute('aria-label') || el.hasAttribute('aria-labelledby');
+  }
+
+  // Playwright's presentational-role-conflict resolution (the aria-attribute/tabindex half
+  // of it -- see the comment on `roleOf` for the natively-focusable half this deliberately
+  // does not replicate). Shared between `roleOf` and `landmarkRoleOf` so the two can't
+  // drift apart on what "conflicted" means.
+  function hasPresentationalConflict(el: Element): boolean {
+    return GLOBAL_ARIA_ATTRIBUTES.some((a) => el.hasAttribute(a))
+      || !Number.isNaN(Number(String(el.getAttribute('tabindex'))));
+  }
+
+  // Same defect shape Wave 2A fixed in `landmarkOf`: an explicit `role` attribute must be
+  // validated (case-sensitive, must name a real ARIA role -- `explicitRoleOf` below) before
+  // being handed back, and a discarded `presentation`/`none` role must fall through to the
+  // implicit-role computation rather than being returned as an invalid string or a bare
+  // `null`. Presentational-role-conflict resolution is a general ARIA rule, not a
+  // landmark-specific one, so it applies here too, via the shared `hasPresentationalConflict`.
+  //
+  // Known gap: real Playwright's conflict check also fires whenever the element is
+  // natively focusable -- a bare `<button role="presentation">` with no aria-* attribute
+  // and no tabindex is *still* resolved back to `button`, because buttons are focusable by
+  // default (see `isFocusable`/`isNativelyFocusable` in roleUtils.ts). Replicating that
+  // exactly would also mean replicating `isNativelyDisabled`'s fieldset/optgroup
+  // exceptions -- more machinery than this ride-along fix is scoped for. Left as a known
+  // narrowing: a natively-interactive element deliberately marked presentational/none with
+  // no aria-* attribute and no tabindex can resolve to `null` here where real Playwright
+  // would still resolve its implicit role. This fails closed (costs recall, not
+  // correctness), consistent with this function's other failure modes.
   function roleOf(el: Element): string | null {
-    const explicit = el.getAttribute('role');
-    if (explicit) return explicit;
+    const explicit = explicitRoleOf(el);
+    if (explicit === 'none' || explicit === 'presentation') {
+      if (!hasPresentationalConflict(el)) return null;
+      // conflicted: fall through to the implicit-role computation below.
+    } else if (explicit) {
+      return explicit;
+    }
     if (el.tagName === 'INPUT') {
-      return INPUT_ROLE[(el as HTMLInputElement).type] ?? 'textbox';
+      const type = (el as HTMLInputElement).type;
+      // Playwright: a text-ish input wired to a <datalist> via `list` is a combobox,
+      // regardless of its own type.
+      if (['email', 'search', 'tel', 'text', 'url'].includes(type)) {
+        const listId = el.getAttribute('list');
+        const list = listId ? document.getElementById(listId) : null;
+        if (list?.tagName === 'DATALIST') return 'combobox';
+      }
+      return INPUT_ROLE[type] ?? 'textbox';
     }
     if (el.tagName === 'A' && !el.getAttribute('href')) return null;
+    if (el.tagName === 'SECTION') return hasExplicitAccessibleName(el) ? 'region' : null;
+    if (el.tagName === 'FORM') return hasExplicitAccessibleName(el) ? 'form' : null;
     return IMPLICIT_ROLE[el.tagName] ?? null;
   }
 
@@ -145,16 +202,14 @@ export function harvestInPage(testIdAttribute: string): ElementRecord[] {
     const explicit = explicitRoleOf(el);
     if (!explicit) return implicitLandmarkOf(el);
     if (explicit === 'none' || explicit === 'presentation') {
-      // Presentational-role-conflict resolution: `role="presentation"` is discarded, and
-      // the implicit role reinstated, when the element carries a global aria-* attribute
-      // or a tabindex. `hasTabIndex` is Playwright's own numeric test, so `tabindex="-1"`
-      // and even `tabindex=""` (Number('') === 0) both count, while `tabindex="soon"` does
-      // not. Playwright's `isFocusable` also admits natively-focusable tags, but none of
-      // those (button/details/select/textarea/a[href]/area[href]/input) has a landmark as
-      // its implicit role, so that arm can never change a landmark answer.
-      const conflicted = GLOBAL_ARIA_ATTRIBUTES.some((a) => el.hasAttribute(a))
-        || !Number.isNaN(Number(String(el.getAttribute('tabindex'))));
-      return conflicted ? implicitLandmarkOf(el) : null;
+      // Presentational-role-conflict resolution (shared with `roleOf` via
+      // `hasPresentationalConflict`): `role="presentation"` is discarded, and the implicit
+      // role reinstated, when the element carries a global aria-* attribute or a tabindex.
+      // Playwright's `isFocusable` also admits natively-focusable tags, but none of those
+      // (button/details/select/textarea/a[href]/area[href]/input) has a landmark as its
+      // implicit role, so that arm can never change a landmark answer -- see `roleOf`'s own
+      // comment for why the general function does not get to make the same simplification.
+      return hasPresentationalConflict(el) ? implicitLandmarkOf(el) : null;
     }
     return explicit;
   }
