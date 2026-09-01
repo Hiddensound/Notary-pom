@@ -62,6 +62,35 @@ describe('emitBase', () => {
   });
 });
 
+describe('emitBase fragile marker', () => {
+  const fragilePage: PageIR = {
+    ...page,
+    elements: [
+      el({ id: 'el_1', name: 'addToCartButton',
+           locator: { scope: null, fragile: true, candidate: { strategy: 'css', value: 'body > div > button' } } }),
+      el({ id: 'el_2', name: 'checkoutButton',
+           locator: { scope: null, fragile: false, candidate: { strategy: 'testId', value: 'checkout' } } }),
+    ],
+    collections: [],
+  };
+  const src = emitBase(fragilePage);
+
+  it('marks exactly the fragile getter\'s line, not the non-fragile one', () => {
+    const fragileLine = src.split('\n').find((l) => l.includes('get addToCartButton()'));
+    const nonFragileLine = src.split('\n').find((l) => l.includes('get checkoutButton()'));
+    expect(fragileLine).toContain('// fragile: positional CSS path');
+    expect(nonFragileLine).not.toContain('fragile');
+  });
+
+  it('reflects the fragile count in the header', () => {
+    expect(src).toContain('// fragile: 1');
+  });
+
+  it('reports a fragile count of zero when nothing is fragile', () => {
+    expect(emitBase(page)).toContain('// fragile: 0');
+  });
+});
+
 describe('emitSubclass', () => {
   it('extends the base and carries no banner', () => {
     const src = emitSubclass(page);

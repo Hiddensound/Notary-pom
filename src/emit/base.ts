@@ -21,10 +21,12 @@ function renderAction(a: PlannedAction): string {
 export function emitBase(page: PageIR): string {
   const resolved = page.elements.filter((e) => e.status === 'resolved' && e.locator);
   const unresolved = page.elements.length - resolved.length;
+  const fragile = resolved.filter((e) => e.locator!.fragile).length;
 
-  const getters = resolved.map(
-    (e) => `  get ${e.name}(): Locator { return ${renderCandidate(e.locator!)}; }`,
-  );
+  const getters = resolved.map((e) => {
+    const line = `  get ${e.name}(): Locator { return ${renderCandidate(e.locator!)}; }`;
+    return e.locator!.fragile ? `${line} // fragile: positional CSS path` : line;
+  });
 
   const collections = page.collections.flatMap((c) => {
     const root = renderCandidate(c.item);
@@ -47,6 +49,7 @@ export function emitBase(page: PageIR): string {
     `// route: ${page.routeTemplate}`,
     `// page fingerprint: ${page.pageFingerprint}`,
     `// unresolved: ${unresolved}`,
+    `// fragile: ${fragile}`,
     '',
     "import type { Locator, Page } from '@playwright/test';",
     '',
