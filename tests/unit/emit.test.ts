@@ -8,7 +8,7 @@ const el = (over: Partial<IRElement>): IRElement => ({
   id: 'el_1', name: 'addToCartButton', nameSource: 'deterministic', kind: 'interactive',
   role: 'button', accessibleName: 'Add to cart', group: 'main', status: 'resolved',
   locator: { scope: null, fragile: false, candidate: { strategy: 'testId', value: 'add-to-cart' } },
-  rejected: [], observed: {} as never, ...over,
+  rejected: [], observed: {} as never, weak: false, ...over,
 });
 
 const page: PageIR = {

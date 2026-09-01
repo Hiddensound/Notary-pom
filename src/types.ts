@@ -72,6 +72,12 @@ export interface IRElement {
   locator: ScopedCandidate | null;
   rejected: RejectedCandidate[];
   observed: ElementRecord;
+  // True when the name was not derived from a real accessible name -- a role/tag
+  // fallback, or a collision suffix `resolveCollisions` had to append. This is the
+  // signal `selectWeak` (src/name/llm.ts) uses to pick refinement candidates; it is
+  // required rather than optional so every construction site has to supply a real
+  // value instead of silently compiling with `weak` falsy-undefined.
+  weak: boolean;
 }
 
 export interface IRCollection {

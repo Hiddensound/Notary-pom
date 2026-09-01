@@ -10,7 +10,7 @@ const el = (id: string, over: Partial<IRElement> = {}): IRElement => ({
   id, name: 'someButton', nameSource: 'deterministic', kind: 'interactive',
   role: 'button', accessibleName: 'Some', group: 'main', status: 'resolved',
   locator: { scope: null, fragile: false, candidate: { strategy: 'testId', value: 'some' } },
-  rejected: [], observed: {} as never, ...over,
+  rejected: [], observed: {} as never, weak: false, ...over,
 });
 
 const nb = (pages: PageIR[]): Notebook =>

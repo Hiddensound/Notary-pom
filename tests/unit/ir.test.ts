@@ -196,7 +196,7 @@ describe('buildPageIR', () => {
   const makeElement = (name: string): IRElement => ({
     id: `el-${name}`, name, nameSource: 'deterministic', kind: 'interactive',
     role: 'button', accessibleName: name, group: 'main', status: 'resolved',
-    locator: null, rejected: [],
+    locator: null, rejected: [], weak: false,
     observed: { ...base, accessibleName: name, text: name },
   });
 

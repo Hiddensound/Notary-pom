@@ -168,6 +168,7 @@ export async function resolveElements(
       locator: winner,
       rejected,
       observed: entry.record,
+      weak: entry.weak,
     });
   }
 

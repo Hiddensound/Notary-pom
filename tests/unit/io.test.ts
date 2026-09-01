@@ -15,7 +15,7 @@ const nb: Notebook = {
       id: 'el_1', name: 'ctaButton', nameSource: 'deterministic', kind: 'interactive',
       role: 'button', accessibleName: 'Go', group: 'main', status: 'resolved',
       locator: { scope: null, fragile: false, candidate: { strategy: 'testId', value: 'cta' } },
-      rejected: [], observed: {} as never,
+      rejected: [], observed: {} as never, weak: false,
     }],
   }],
 };

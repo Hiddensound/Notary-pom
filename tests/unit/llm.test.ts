@@ -20,13 +20,32 @@ const el = (id: string, name: string, weak: boolean): IRElement => ({
   id, name, nameSource: 'deterministic', kind: 'interactive', role: 'button',
   accessibleName: weak ? null : name, group: 'main', status: 'resolved',
   locator: { scope: null, fragile: false, candidate: { strategy: 'testId', value: id } },
-  rejected: [], observed: { text: 'x' } as never,
+  rejected: [], observed: { text: 'x' } as never, weak,
 });
 
 describe('selectWeak', () => {
-  it('picks role-only and numerically suffixed names', () => {
+  // `selectWeak` now reads the real `weak` field `deterministicName`/`resolveCollisions`
+  // computed upstream, rather than re-deriving a proxy from the name string, so these
+  // build `IRElement`s with an explicit `weak` field directly -- no need to route through
+  // `deterministicName`/`resolveCollisions` for a unit test of a one-line filter.
+  it('selects elements the upstream pipeline flagged weak', () => {
     const weak = selectWeak([el('a', 'button', true), el('b', 'moreButton2', true), el('c', 'checkoutButton', false)]);
     expect(weak.map((e) => e.id)).toEqual(['a', 'b']);
+  });
+
+  // The specific over-broad case the old `!e.accessibleName` check got wrong: an element
+  // can have a good testId-derived name and no accessibleName at all (nothing in the DOM
+  // to derive one from) without being weak. `weak: false` here is the discriminator --
+  // the old check would have selected this element purely because `accessibleName` is
+  // null; the new one must not, because nothing about the name itself is a fallback.
+  it('does not select a well-named element that merely lacks an accessible name', () => {
+    const el2: IRElement = {
+      id: 'd', name: 'submitOrderTestidButton', nameSource: 'deterministic', kind: 'interactive',
+      role: 'button', accessibleName: null, group: 'main', status: 'resolved',
+      locator: { scope: null, fragile: false, candidate: { strategy: 'testId', value: 'd' } },
+      rejected: [], observed: { text: null } as never, weak: false,
+    };
+    expect(selectWeak([el2])).toEqual([]);
   });
 });
 

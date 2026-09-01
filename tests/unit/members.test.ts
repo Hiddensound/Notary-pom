@@ -96,7 +96,7 @@ const el = (over: Partial<IRElement> = {}): IRElement => ({
   kind: 'interactive', role: 'button', accessibleName: null, group: 'main',
   status: 'resolved',
   locator: { scope: null, fragile: false, candidate: { strategy: 'testId', value: 'thing' } },
-  rejected: [], observed: record(), ...over,
+  rejected: [], observed: record(), weak: false, ...over,
 });
 
 const buildPage = (

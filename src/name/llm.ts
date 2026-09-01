@@ -11,10 +11,16 @@ export type NameCache = Record<string, string>;
 export type LlmCall = (elements: IRElement[]) => Promise<Record<string, string>>;
 
 const VALID = /^[a-z][A-Za-z0-9]*$/;
-const WEAK_PATTERNS = [/^(button|link|input|select|checkbox|radio|img|heading)$/i, /[0-9]$/];
 
+// `weak` is computed once, upstream, by `deterministicName`/`resolveCollisions` (a name
+// derived purely from role/tag fallback, or one that needed a numeric collision suffix) and
+// threaded onto `IRElement` in `resolveElements`. Filtering on that real signal, rather than
+// re-deriving a proxy from the name string here, is what this function used to get wrong: the
+// old `WEAK_PATTERNS[0]` anchored pattern could never match because `deterministicName`
+// always appends a role suffix (`buttonButton`, never bare `button`), and `!e.accessibleName`
+// spent refinement tokens on elements that already had a good testId-derived name.
 export function selectWeak(elements: IRElement[]): IRElement[] {
-  return elements.filter((e) => !e.accessibleName || WEAK_PATTERNS.some((p) => p.test(e.name)));
+  return elements.filter((e) => e.weak);
 }
 
 export async function refineNames(weak: IRElement[], cache: NameCache, call: LlmCall): Promise<NameCache> {
