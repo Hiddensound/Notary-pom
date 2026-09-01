@@ -41,14 +41,22 @@ describe('templateRoutes', () => {
 });
 
 describe('mergeRouteGroups', () => {
-  // The trigger is real end to end: scrubUrl strips only a credential blocklist, so utm_*
-  // survives and two distinct crawled URLs share one pathname. validateGroups' fallback
-  // keys its groups on that pathname, so it emits the same routeTemplate twice.
-  it('the utm_* pair really does survive scrubUrl with one shared pathname', () => {
+  // Wave 3 (finding 3.2) made scrubUrl strip every query parameter, not just a credential
+  // blocklist. Before that fix, utm_* survived scrubbing, so two distinct crawled URLs
+  // sharing one pathname (`/product/b?utm_source=nav` vs `?utm_source=footer`) reached
+  // validateGroups' pathname-keyed fallback as two different URLs and it emitted the same
+  // routeTemplate twice -- the exact scenario mergeRouteGroups exists to fold back
+  // together. Now that scrubUrl drops the whole query string, that specific trigger can no
+  // longer occur: the two URLs are deduplicated far upstream, in crawlSite's `seen` set,
+  // before they ever reach templateRoutes or validateGroups. mergeRouteGroups itself stays
+  // in place as a defensive no-op for any other way a routeTemplate collision could arise;
+  // the remaining tests below exercise it directly against hand-built RouteGroup input so
+  // that safety net stays covered even though this particular trigger is now moot.
+  it('scrubUrl now collapses the former utm_* pair to one identical url', () => {
     const a = scrubUrl('https://s.test/product/b?utm_source=nav');
     const b = scrubUrl('https://s.test/product/b?utm_source=footer');
-    expect(a).not.toBe(b);
-    expect(new URL(a).pathname).toBe(new URL(b).pathname);
+    expect(a).toBe(b);
+    expect(a).toBe('https://s.test/product/b');
   });
 
   it('folds groups sharing a route template into one, merging their samples', () => {

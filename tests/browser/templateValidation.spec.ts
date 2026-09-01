@@ -16,10 +16,16 @@ const MIXED_SHAPE: Record<string, string> = {
   '/p/c': '<main><h1>C</h1><button data-testid="add">Add</button></main>',
 };
 
-// Same structural disagreement as MIXED_SHAPE, but /p/b is reached by two distinct URLs
-// that differ only in a `utm_*` param. scrubUrl keeps utm_*, so both survive pass 1 as
-// separate URLs, and validateGroups' fallback keys its groups on `new URL(url).pathname`
-// -- which is identical for the two. Without mergeRouteGroups that emits /p/b twice.
+// Same structural disagreement as MIXED_SHAPE. /p/b is *linked to* twice, by two URLs that
+// used to differ only in a `utm_*` param -- before Wave 3 (finding 3.2), scrubUrl kept
+// utm_* and both survived pass 1 as separate URLs, so validateGroups' fallback (which keys
+// its groups on `new URL(url).pathname`) emitted /p/b twice and relied on mergeRouteGroups
+// to fold them back into one. Now scrubUrl strips the whole query string, so both links
+// scrub to the identical `https://shop.test/p/b` and crawlSite's pass-1 `seen` set
+// deduplicates them before either ever reaches templateRoutes or validateGroups -- the
+// crawler visits /p/b once, not twice. This fixture is kept to prove that end to end: one
+// page per pathname still holds, but now because there is only ever one URL to begin with,
+// not because mergeRouteGroups folded two of them together.
 const MIXED_SHAPE_WITH_QUERY_TWINS: Record<string, string> = {
   '/': '<main>'
     + '<a href="/p/a">A</a>'
@@ -57,7 +63,7 @@ test('splits the template when two samples are structurally different', async ()
   expect(routes).toEqual(expect.arrayContaining(['/p/a', '/p/b', '/p/c']));
 });
 
-test('emits one page per pathname when the split fallback sees two urls sharing one', async () => {
+test('emits one page per pathname when two links to it differ only by a stripped query param', async () => {
   const browser = await chromium.launch();
   const nb = await crawlSite(
     browser,
@@ -80,10 +86,9 @@ test('emits one page per pathname when the split fallback sees two urls sharing 
   const classNames = nb.pages.map((p) => p.className);
   expect(new Set(classNames).size).toBe(classNames.length);
 
-  // Both URLs are preserved as samples of the one page rather than one being discarded.
+  // scrubUrl now strips the whole query string, so the nav and footer links to /p/b scrub
+  // to the identical string and crawlSite's pass-1 `seen` set never discovers a second
+  // URL to sample -- there is exactly one, with the query gone.
   const b = nb.pages.find((p) => p.routeTemplate === '/p/b')!;
-  expect(b.sampleUrls).toEqual([
-    'https://shop.test/p/b?utm_source=footer',
-    'https://shop.test/p/b?utm_source=nav',
-  ]);
+  expect(b.sampleUrls).toEqual(['https://shop.test/p/b']);
 });

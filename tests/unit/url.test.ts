@@ -3,9 +3,12 @@ import { scrubUrl } from '../../src/url/scrub.js';
 import { isDenied } from '../../src/url/denyList.js';
 
 describe('scrubUrl', () => {
-  it('strips credential-bearing params but keeps benign ones', () => {
-    const out = scrubUrl('https://s.test/p?token=abc123&colour=red&code=xyz');
-    expect(out).toBe('https://s.test/p?colour=red');
+  // The spec is unconditional: strip every query parameter, not a blocklist. This
+  // replaces the old 'strips credential-bearing params but keeps benign ones' case, which
+  // asserted the spec-violating behavior (a benign `colour=red` surviving) as correct.
+  it('strips every query parameter, not just known credential names', () => {
+    const out = scrubUrl('https://s.test/p?colour=red&X-Amz-Signature=DEADBEEF&mkt_tok=abc&sso=zzz&access-token=t');
+    expect(out).toBe('https://s.test/p');
   });
 
   it('drops the hash fragment and trailing slash', () => {
@@ -14,10 +17,6 @@ describe('scrubUrl', () => {
 
   it('leaves a clean url untouched', () => {
     expect(scrubUrl('https://s.test/p')).toBe('https://s.test/p');
-  });
-
-  it('sorts params so identical pages fingerprint identically', () => {
-    expect(scrubUrl('https://s.test/p?b=2&a=1')).toBe('https://s.test/p?a=1&b=2');
   });
 });
 
@@ -36,5 +35,10 @@ describe('isDenied', () => {
 
   it('does not deny on a substring inside an unrelated word', () => {
     expect(isDenied('/collections/deletable-art', 'Deletable Art')).toBe(false);
+  });
+
+  it('denies Devise-style sign_out and log_out', () => {
+    expect(isDenied('/users/sign_out', 'Sign out')).toBe(true);
+    expect(isDenied('/log_out', 'Log out')).toBe(true);
   });
 });

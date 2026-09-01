@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 const DENY_WORDS = [
-  'signout', 'sign-out', 'logout', 'log-out',
+  'signout', 'sign-out', 'sign_out', 'logout', 'log-out', 'log_out',
   'delete', 'remove', 'cancel', 'deactivate', 'unsubscribe', 'destroy',
 ];
 

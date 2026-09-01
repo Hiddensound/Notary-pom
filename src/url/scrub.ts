@@ -1,22 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import { compareStrings } from '../util/order.js';
-
-const CREDENTIAL_PARAMS = new Set([
-  'token', 'access_token', 'id_token', 'refresh_token', 'code', 'state',
-  'session', 'sessionid', 'sid', 'auth', 'key', 'apikey', 'api_key',
-  'password', 'secret', 'signature', 'sig', 'jwt', 'ticket',
-  'x-vercel-protection-bypass', 'magic', 'otp', 'nonce',
-]);
-
+// The spec (POMBuilder-design-v1.md: "Crawled URLs are stripped of query parameters
+// before being written as `representativeUrl`, because magic links and OAuth callbacks
+// carry tokens in the URL and would otherwise land in a file pushed to GitHub") is
+// unconditional -- strip every query parameter, not a blocklist. A blocklist approach
+// verifiably under-strips: `X-Amz-Signature` (S3 presigned URLs), `access-token`
+// (hyphenated -- a blocklist keyed on `access_token` misses it), `mkt_tok`, `sso`,
+// `saml_response` and `oauth_token` all survived a 24-entry blocklist and would have
+// landed in a notebook committed to source control and in the generated smoke spec's
+// `page.goto(...)`.
 export function scrubUrl(raw: string): string {
   const u = new URL(raw);
   u.hash = '';
-  const kept = [...u.searchParams.entries()]
-    .filter(([k]) => !CREDENTIAL_PARAMS.has(k.toLowerCase()))
-    .sort(([a], [b]) => compareStrings(a, b));
   u.search = '';
-  for (const [k, v] of kept) u.searchParams.append(k, v);
   if (u.pathname.length > 1 && u.pathname.endsWith('/')) u.pathname = u.pathname.slice(0, -1);
   return u.toString();
 }
