@@ -50,6 +50,20 @@ test('looksLikeLogin is false on an ordinary page', async ({ page }) => {
   expect(await looksLikeLogin(page, config)).toBe(false);
 });
 
+test('looksLikeLogin matches an identifier-first page with no password field', async ({ page }) => {
+  const config = withDefaults({ seed: 'https://s.test' });
+  await page.setContent(
+    '<form><input type="email" autocomplete="username" /><button type="submit">Next</button></form>',
+  );
+  expect(await looksLikeLogin(page, config)).toBe(true);
+});
+
+test('looksLikeLogin stays false for an unrelated email field with no submit control at all', async ({ page }) => {
+  const config = withDefaults({ seed: 'https://s.test' });
+  await page.setContent('<h1>Subscribe to our newsletter</h1><input type="email" placeholder="you@example.com" />');
+  expect(await looksLikeLogin(page, config)).toBe(false);
+});
+
 test('bindCandidate resolves the same node renderCandidate describes', async ({ page }) => {
   await page.setContent(`<nav><a data-testid="cart-link">Cart</a></nav>`);
   const loc = bindCandidate(page, {
