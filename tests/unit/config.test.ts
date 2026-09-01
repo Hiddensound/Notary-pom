@@ -20,6 +20,16 @@ describe('withDefaults', () => {
   it('preserves caller overrides', () => {
     expect(withDefaults({ seed: 'https://s.test', maxPages: 5 }).maxPages).toBe(5);
   });
+
+  // Before this fix, a typo'd seed died deep inside `crawlSite` at `new URL(config.seed).origin`
+  // as a bare `TypeError: Invalid URL` that never named `seed` or the offending value.
+  it('rejects a seed that is not a URL', () => {
+    expect(() => withDefaults({ seed: 'not a url' })).toThrow(/seed/i);
+  });
+
+  it('still accepts a valid URL seed unchanged', () => {
+    expect(withDefaults({ seed: 'https://shop.test/path' }).seed).toBe('https://shop.test/path');
+  });
 });
 
 describe('loadConfig', () => {

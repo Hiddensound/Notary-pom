@@ -6,6 +6,11 @@ import type { PomBuilderConfig } from './types.js';
 
 export function withDefaults(input: Partial<PomBuilderConfig>): PomBuilderConfig {
   if (!input.seed) throw new Error('config: `seed` is required');
+  try {
+    new URL(input.seed);
+  } catch {
+    throw new Error(`config: \`seed\` must be a valid URL, got ${JSON.stringify(input.seed)}`);
+  }
   return {
     seed: input.seed,
     outDir: input.outDir ?? 'tests',
