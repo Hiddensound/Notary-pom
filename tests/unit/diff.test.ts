@@ -71,6 +71,24 @@ describe('diffNotebooks', () => {
     const r = diffNotebooks(nb([pg([el('a')])]), nb([pg([el('a')])]));
     expect(r.elements).toHaveLength(0);
   });
+
+  // Regression for the fingerprint-collision fix in `resolveElements`: two elements that
+  // fingerprint identically now get distinct ids, the first bare and the second suffixed
+  // `_2`. Before that fix both collapsed onto one id and `diffNotebooks`' id-keyed
+  // before/after maps silently dropped whichever member arrived first -- a regression on
+  // that first member (here: it stops resolving) never reached the drift report. This
+  // rebuilds the exact collision shape with the ordinal-suffixed second id and checks the
+  // regression on the first member is now reported.
+  it('reports a regression on the first member of a fingerprint-colliding pair', () => {
+    const first = el('el_abc123456789', { name: 'goButton' });
+    const second = el('el_abc123456789_2', { name: 'goButton2' });
+    const firstRegressed = { ...first, status: 'unresolved' as const, locator: null };
+
+    const r = diffNotebooks(nb([pg([first, second])]), nb([pg([firstRegressed, second])]));
+    expect(r.elements).toEqual([
+      { page: '/p', id: 'el_abc123456789', name: 'goButton', change: 'nowUnresolved', detail: 'no unique locator' },
+    ]);
+  });
 });
 
 describe('formatDrift', () => {

@@ -139,10 +139,25 @@ export async function resolveElements(
 
   const out: IRElement[] = [];
 
+  // Two elements can share route, kind, role, landmark and identity-fallback and so
+  // fingerprint identically -- ordinary duplicated page furniture such as top/bottom
+  // pagination is the common case, not an edge case. Without a disambiguator the second
+  // element's id collides with the first's: `diffNotebooks` keys its before/after maps by
+  // id, so only the last of a colliding group survives and a regression on an earlier
+  // member is invisible to drift detection. The ordinal below is local to this call --
+  // `fingerprintElement` itself stays pure -- and only the second and later occurrence of
+  // a base fingerprint is suffixed, so the common case of no collision keeps today's ids
+  // and today's `names.json` cache entries intact.
+  const seen = new Map<string, number>();
   for (const entry of named) {
+    const base = fingerprintElement(routeTemplate, entry.record);
+    const n = (seen.get(base) ?? 0) + 1;
+    seen.set(base, n);
+    const id = n === 1 ? base : `${base}_${n}`;
+
     const { winner, rejected } = await adjudicate(page, entry.record, testIdAttribute);
     out.push({
-      id: fingerprintElement(routeTemplate, entry.record),
+      id,
       name: entry.name,
       nameSource: 'deterministic',
       kind: entry.record.kind,

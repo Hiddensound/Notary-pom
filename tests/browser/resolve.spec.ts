@@ -52,3 +52,23 @@ test('is deterministic across two runs', async ({ page }) => {
   const second = (await resolveElements(page, await harvest(page, 'data-testid'), '/p')).elements;
   expect(JSON.stringify(first)).toBe(JSON.stringify(second));
 });
+
+// Two buttons with identical text, in the same landmark, with no testId or dom id, share
+// route/kind/role/landmark and identity-fallback (accessibleName here), so they
+// fingerprint identically -- exactly the duplicated-page-furniture case (top/bottom
+// pagination) that silently collapsed two elements onto one id before this fix.
+test('elements colliding on fingerprint get distinct ids, first bare and second suffixed', async ({ page }) => {
+  await page.setContent('<main><button>Go</button><button>Go</button></main>');
+  const ir = (await resolveElements(page, await harvest(page, 'data-testid'), '/p')).elements;
+  expect(ir).toHaveLength(2);
+  expect(ir[0].id).toMatch(/^el_[0-9a-f]{12}$/);
+  expect(ir[1].id).toBe(`${ir[0].id}_2`);
+  expect(ir[0].id).not.toBe(ir[1].id);
+});
+
+test('a page with no colliding elements keeps bare, unsuffixed ids', async ({ page }) => {
+  await page.setContent(`
+    <main><button data-testid="a">Buy</button><h1>Title</h1></main>`);
+  const ir = (await resolveElements(page, await harvest(page, 'data-testid'), '/p')).elements;
+  for (const e of ir) expect(e.id).toMatch(/^el_[0-9a-f]{12}$/);
+});
