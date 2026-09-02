@@ -1,208 +1,266 @@
 # POMBuilder
 
-POMBuilder crawls a web application, verifies every candidate locator against the live
-page, and emits Playwright page objects and smoke specs from what it actually confirmed
-— not from a guess. Locators are never generated from static markup alone: every
-locator that ships in the output was counted, checked for visibility, and disambiguated
-against the running page during the crawl.
+**Generates Playwright page objects containing only locators it has proven work against the live page.**
+
+Point it at a URL. POMBuilder opens a real browser, waits for the page to actually stop moving, harvests
+every interactive element, and then — for each one — tries a ladder of locator strategies **against the
+running DOM** until one provably resolves to the exact element it observed. What it cannot prove, it
+refuses to emit.
+
+You get page objects, a smoke spec that passes on first generation, and a checked-in JSON *notebook*
+recording every decision and every rejected candidate — which makes a re-crawl a readable diff of what
+changed on the site.
+
+---
+
+## Why you'd use this
+
+Every codegen tool will happily hand you `getByTestId('search')`. POMBuilder runs that locator against
+the page first. Here is a real, unedited result from crawling a live storefront:
+
+```
+name: searchForInput2  |  locator: null   ← nothing was emitted
+   tried testId       -> matched 2 | ambiguous
+   tried testId       -> matched 1 | identity     ← ONE match, still rejected
+   tried role         -> matched 1 | identity
+   tried label        -> matched 1 | identity
+   tried placeholder  -> matched 1 | identity
+   ... 9 candidates, all rejected
+```
+
+Read `matched 1 | identity` again. The locator resolved to **exactly one element — and it was the wrong
+one.** That page has two search boxes (header and sidebar widget). A tool that asks *"is this unique?"*
+ships that locator with confidence. POMBuilder asks *"is this the element I actually harvested?"* — and
+when it can't prove that, it emits **nothing**.
+
+You get a visible gap you can fix, instead of a green test quietly asserting against the wrong box.
+
+That's the whole premise: **never emit a guess.**
+
+---
+
+## Requirements
+
+- Node.js 20+
+- Chromium (installed via Playwright below)
 
 ## Install
 
 ```bash
 npm install
+```
+```bash
 npx playwright install chromium
+```
+```bash
 npm run build
 ```
 
-`npm run build` compiles `src/` and `mcp/` to `dist/`. The CLI entry point is
-`dist/src/cli.js` (also exposed as the `pombuilder` bin once the package is installed
-globally or linked).
+`npm run build` compiles `src/` and `mcp/` to `dist/`. The CLI entry point is `dist/src/cli.js` (also
+exposed as the `pombuilder` bin once the package is installed globally or linked).
 
-## CLI commands
+---
 
-All four commands accept an optional `-c, --config <path>` pointing at a config file
-(see [Config file](#config-file) below). `crawl`, `build` and `diff` also take a `[url]`
-positional argument, which is the seed URL to crawl; it overrides `seed` in the config
-file when both are given.
+## Quickstart — a complete run in six steps
+
+A real walkthrough against a public practice storefront (`scrapingcourse.com/ecommerce`, a site built for
+exactly this kind of exercise). **Every output below is actual output from that run.**
+
+### 1. Write a config
+
+Create `demo.config.js` — a plain ES module, since this package is `"type": "module"`:
+
+```js
+export default {
+  seed: 'https://www.scrapingcourse.com/ecommerce/',
+  irDir: 'demo/.pombuilder',   // where the notebook is cached
+  outDir: 'demo/tests',        // where generated code lands
+  maxPages: 8,
+};
+```
+
+> **Paths resolve from where you run the command**, not from the config file's location. If you keep the
+> config in a subfolder, still write `irDir`/`outDir` relative to your repo root — and pass the real path
+> to `-c` (e.g. `-c demo/demo.config.js`), including the `.js` extension.
+
+### 2. Crawl
 
 ```bash
-node dist/src/cli.js crawl <url> [-c config.js]
-node dist/src/cli.js generate [-c config.js]
-node dist/src/cli.js build <url> [-c config.js]
-node dist/src/cli.js diff <url> [-c config.js]
+node dist/src/cli.js crawl -c demo.config.js
 ```
 
-- **`crawl`** — Crawls the site starting at `<url>`, harvests and resolves every
-  interactive element and heading on one representative page per route template — plus
-  any other element that carries a `data-testid` (or configured `testIdAttribute`) or
-  has role `status`/`alert`; an ordinary label or paragraph with no stable handle of its
-  own is not harvested — and writes the result as a notebook (`<irDir>/notebook.json`,
-  default `.pombuilder/notebook.json`). Prints a one-line summary: pages found, elements
-  harvested, elements left unresolved. Nothing under `outDir` is touched. If any page
-  had to be sampled before it stopped changing, a warning naming those pages is printed
-  to stderr — see [Pages that never hold still](#pages-that-never-hold-still).
-- **`generate`** — Reads the stored notebook and turns it into TypeScript: one base
-  class per page (locators, single-element actions), one subclass per page (yours to
-  extend), and one smoke spec per page. Fails if no notebook exists yet — run `crawl`
-  first.
-- **`build`** — `crawl` followed by `generate` in one step. This is the command most
-  projects want day to day.
-- **`diff`** — Re-crawls the same site and compares the fresh result against the
-  stored notebook, without writing anything. Reports pages added or removed and, per
-  element, whether it was added, removed, renamed, changed locator strategy, or
-  flipped between resolved and unresolved. Use this in CI to catch locator drift
-  before it silently breaks a page object. It prints the same unstable-page warning as
-  `crawl`, because that is the first thing to check when a diff looks larger than the
-  change that caused it.
-
-## Config file
-
-A config file is a plain ES module (`.js`, since this package is `"type": "module"`)
-whose default export is a `Partial<PomBuilderConfig>` — every field is optional and
-falls back to a documented default. See [`pombuilder.config.js`](./pombuilder.config.js)
-in this repo for a working example (used by this project's own acceptance run against a
-live third-party site).
-
-```js
-// pombuilder.config.js
-export default {
-  seed: 'https://example.com/',       // default: none — required unless passed on the CLI
-  outDir: 'tests',                    // default: 'tests' — where generated files land
-  irDir: '.pombuilder',               // default: '.pombuilder' — where the notebook is cached
-  maxDepth: 3,                        // default: 3 — how many link-hops from the seed to follow
-  maxPages: 50,                       // default: 50 — hard cap on distinct URLs visited
-  include: [],                        // default: [] — if non-empty, only these path patterns are crawled
-  exclude: [],                        // default: [] — path patterns never crawled (matched against pathname only)
-  testIdAttribute: 'data-testid',     // default: 'data-testid' — attribute checked first when locating elements
-  loginUrlPattern: null,              // default: null — a substring checked against the landed URL (not a regex); matching it mid-crawl aborts as a login redirect
-  respectRobots: true,                // default: true — honor the site's robots.txt
-  contextOptions: {},                 // default: {} — passed straight through to playwright's browser.newContext()
-};
+```
+1 pages, 123 elements, 4 unresolved.
 ```
 
-`include`/`exclude` match against the URL **pathname only** (not the query string), so
-they can steer the crawler away from whole sections of a site but cannot distinguish
-two URLs that differ only in query parameters.
+### 3. Read the receipt
 
-### `contextOptions` — authenticated and gated crawls
+The notebook lands at `demo/.pombuilder/notebook.json`. From that run:
 
-POMBuilder never logs in on its own — if it lands on something that looks like a login
-page mid-crawl it aborts loudly (`LoginRedirectError`) rather than harvesting a login
-form and calling it the target page. To crawl behind auth, put Playwright's own context
-options in `contextOptions`; they are passed through to `browser.newContext()`
-unmodified, with two conveniences: a `storageState` that is falsy is dropped (so you can
-write `storageState: process.env.STORAGE_STATE_PATH` without an `if`), and any
-`extraHTTPHeaders` entry whose value is an empty string is stripped (so an unset
-environment variable never becomes the literal header value `"undefined"`).
+| strategy | count |
+|---|---|
+| `role` | 56 |
+| `css` (positional, fragile) | 39 |
+| `testId` | 24 |
+| **unresolved** | **4** |
 
-```js
-export default {
-  seed: 'https://app.example.com/dashboard',
-  contextOptions: {
-    // Cookie/session state saved earlier with `await context.storageState({ path })`.
-    storageState: './.auth/state.json',
-
-    // Header-based gates (staging bypass tokens, feature-flag headers, etc.).
-    extraHTTPHeaders: {
-      'x-bypass-token': process.env.BYPASS_TOKEN ?? '',
-    },
-
-    // HTTP Basic Auth.
-    httpCredentials: { username: 'demo', password: process.env.DEMO_PASSWORD },
-  },
-};
-```
-
-### LLM name refinement
-
-Deterministic naming falls back to a role/tag base (`button1`, `link2`, ...) whenever an
-element has no usable accessible name — commonly on a non-Latin-script site, since
-`deterministicName` strips non-ASCII characters. POMBuilder can optionally send those
-*weakly-named* elements to Claude for a better name.
-
-**What turns it on.** Setting the `ANTHROPIC_API_KEY` environment variable — nothing in
-the config file — is what enables refinement. If it's set, every `crawl` that harvests
-any weakly-named element not already in the cache makes a paid Anthropic API call.
-There is no separate opt-in and no dry-run: **exporting this variable silently turns
-every applicable `crawl` into a billed API call.** Unset it (or don't set it) to keep
-`crawl` fully offline and free.
-
-**What gets sent.** Per weakly-named element: its `id`, `role`, `testId`, up to 60
-characters of its text content, and its enclosing landmark (`src/name/llm.ts`'s
-`anthropicCall`). No locator, no selector, and no surrounding page content is sent —
-only that small, per-element identifying record.
-
-**Where the result is cached.** Suggested names are cached at `<irDir>/names.json`,
-keyed by element id, and reused on every later `crawl` — an element already in the
-cache is never re-sent. This file is meant to be committed alongside the notebook, so a
-teammate (or CI) without `ANTHROPIC_API_KEY` set still gets the refined names.
-
-**What happens on failure.** A request or API failure never fails the build: refinement
-falls back to the deterministic name for whatever it couldn't get, silently. The
-`@anthropic-ai/sdk` dependency itself is an optional peer dependency, imported lazily
-only when refinement actually runs, so it is not required at all when
-`ANTHROPIC_API_KEY` is unset.
-
-**How you'd notice this without reading the code.** `crawl`/`build` print a warning
-(`formatWeakNaming`) whenever a page's naming looks like it degraded to the role/tag
-fallback for most of its elements — that warning is also what tells you to consider
-setting `ANTHROPIC_API_KEY` in the first place.
-
-## The base/subclass split
-
-`generate` (and `build`) write three files per page object under `outDir`:
+Every element carries its full adjudication trail. Here's one that had to fall back:
 
 ```
-tests/pages/generated/<ClassName>.generated.ts   # base class — regenerated every run
-tests/pages/<ClassName>.ts                        # subclass — written once, then left alone
-tests/smoke/<ClassName>.smoke.spec.ts             # smoke spec — regenerated every run
+name: defaultSortingSortByPopularity2   →  SHIPPED: css (fragile: true)
+  tried testId  → matched 2 | ambiguous     ← the obvious locator was wrong
+  tried testId  → matched 2 | ambiguous     ← retried scoped to its landmark, still wrong
 ```
 
-The **base class** (`<ClassName>Base`) holds every locator getter, single-element
-action (`clickX`, `fillX`, `checkX`, `selectX`), and collection accessor POMBuilder
-resolved. It is marked `// GENERATED BY POMBUILDER — DO NOT EDIT` and is overwritten on every
-`generate`/`build` run — re-crawling a site whose markup hasn't changed produces
-byte-for-byte identical output.
+That page has a `data-testid` that *looks* perfect. It matches **two** elements — the top and bottom
+sorting forms. That's a flaky test you didn't ship.
 
-The **subclass** (`<ClassName>`) is where you add multi-step flows (`addToCartAndCheckout()`,
-page-specific assertions, whatever your tests need). POMBuilder writes it exactly once,
-the first time it sees that class name, with an empty body extending the base class. On
-every later run it checks whether the file already exists and, if so, leaves it
-completely untouched — your hand edits are safe no matter how many times you re-crawl.
+**This step is where the value is.** Before writing a line of test code you can see how much of the page
+is reliably addressable and how much is held together with positional paths — which is exactly the
+evidence you need to go ask a developer for a handful of `data-testid` attributes.
 
-The **smoke spec** is also regenerated every run. It asserts every resolved locator on
-the page has a unique, visible match, so a broken locator shows up as a normal test
-failure the next time you run it, before anyone builds a real test on top of it.
+### 4. Generate
 
-## `unresolved` elements
+```bash
+node dist/src/cli.js generate -c demo.config.js
+```
 
-Every element POMBuilder harvests gets a `status` of `resolved` or `unresolved`. An
-element becomes `unresolved` when POMBuilder could not find one single, visible match
-for any of its candidate locators — every candidate either matched zero elements,
-matched more than one (even after narrowing the search to the element's own landmark),
-or matched exactly one element that turned out to be hidden.
+```
+Wrote 3 files. Left 0 hand-owned files untouched.
+```
 
-POMBuilder deliberately does not fall back to a weaker locator (a brittle CSS path, an
-`nth()` index) to force a resolution. An `unresolved` element is left out of the base
-class entirely — no getter is emitted for it — rather than shipping a locator that
-looks confident and breaks the first time the page's markup shifts. The `unresolved`
-count is printed by `crawl`/`build` and recorded in the base class's header comment
-(`// unresolved: N`), and every rejected candidate — with its match count and reason —
-is kept in the notebook so you can see exactly why an element didn't resolve and add a
-`data-testid` (or similar) if you want it covered.
+### 5. Give the generated tests a Playwright config
 
-In this project's own acceptance run against a live public storefront
-(`https://www.scrapingcourse.com/ecommerce/`), 120 of 123 harvested elements resolved —
-about 97.6%.
+Generated specs live under your `outDir`, so point a config at them. Create
+`demo/tests/playwright.config.ts`:
+
+```ts
+import { defineConfig } from '@playwright/test';
+export default defineConfig({ testDir: 'smoke', use: { headless: true } });
+```
+
+### 6. Run the generated smoke spec
+
+```bash
+npx playwright test -c demo/tests/playwright.config.ts
+```
+
+```
+1 passed (5.4s)
+```
+
+119 locators asserted unique-and-visible against the live site — **passing by construction**, because
+every one was verified before it was written. A failure here later is real signal about the site, never
+generator sloppiness.
+
+`crawl` + `generate` in one step is `build`:
+
+```bash
+node dist/src/cli.js build -c demo.config.js
+```
+
+---
+
+## What you get
+
+Three files per page:
+
+```
+<outDir>/pages/generated/<ClassName>.generated.ts   # regenerated every run
+<outDir>/pages/<ClassName>.ts                       # yours — written once, never touched again
+<outDir>/smoke/<ClassName>.smoke.spec.ts            # regenerated every run
+```
+
+**The generated base class** carries a header summary and inline warnings:
+
+```ts
+// GENERATED BY POMBUILDER — DO NOT EDIT
+// route: /ecommerce
+// page fingerprint: pg_608e1b06e30df986
+// unresolved: 4
+// fragile: 39
+
+export abstract class EcommercePageBase {
+  static readonly route = '/ecommerce';
+  static readonly url = 'https://www.scrapingcourse.com/ecommerce';
+
+  constructor(protected readonly page: Page) {}
+
+  get abominableHoodieHeading(): Locator { return this.page.getByRole('heading', { name: 'Abominable Hoodie', exact: true }); }
+  get defaultSortingSortByPopularity2(): Locator { return this.page.locator('body > div:nth-child(1) > ...'); } // fragile: positional CSS path
+
+  async clickAddToCartAffirmWater(): Promise<void> { await this.addToCartAffirmWaterLink.click(); }
+}
+```
+
+`// fragile: 39` plus the per-getter `// fragile:` markers mean you can see which locators are brittle
+without opening the notebook. Single-element actions (`clickX`, `fillX`, `checkX`, `selectX`) are derived
+from each element's role.
+
+**The subclass is yours forever.** POMBuilder writes it once, the first time it sees that class name,
+then never touches it again — so your multi-step flows survive every re-crawl:
+
+```ts
+export class EcommercePage extends EcommercePageBase {
+  async addToCartAndCheckout(): Promise<void> { /* yours */ }
+}
+```
+
+Generated code gets only what's mechanically derivable. Anything requiring judgement stays on your side
+of the line.
+
+---
+
+## Drift detection and the CI gate
+
+The notebook is meant to be **committed**. That makes `diff` a structural comparison of your whole site's
+locator health — not a single failing selector discovered after a test already broke.
+
+```bash
+node dist/src/cli.js diff -c demo.config.js
+```
+
+Simulating a developer removing a `data-testid`:
+
+```
+/ecommerce  strategyChanged  defaultSortingSortByPopularity2  (testId -> css) [regression]
+```
+
+…and the process exits **2**. Against an unchanged site:
+
+```
+No drift detected.
+```
+
+…exit **0**.
+
+| exit code | meaning |
+|---|---|
+| `0` | nothing changed |
+| `1` | worst drift is `info` or `warning` |
+| `2` | something **regressed** — block the merge |
+
+| severity | assigned when |
+|---|---|
+| `info` | an element or page appeared, was renamed, or started resolving again |
+| `warning` | an element or page disappeared, or a locator strategy changed |
+| `regression` | a locator **stopped resolving**, or degraded to a `fragile` one |
+
+So a CI gate is one exit-code check. Add `--json` for the full `DriftReport` if you want to feed it to
+tooling instead.
+
+> Two consecutive live crawls returning `No drift detected` is the determinism guarantee doing its job.
+> Without it, a diff-based gate would cry wolf on every SPA.
+
+---
 
 ## MCP server
 
-`mcp/server.ts` (built to `dist/mcp/server.js`) exposes the same crawl/generate/diff
-pipeline as three MCP tools — `pombuilder_crawl`, `pombuilder_generate`,
-`pombuilder_diff` — so an MCP-aware client can drive POMBuilder directly. The tools do
-pure argument marshalling; all of the actual logic still lives in `src/`.
+POMBuilder ships an [MCP](https://modelcontextprotocol.io) server exposing the same pipeline as tools, so
+an MCP-aware client (Claude Desktop, Claude Code, or anything else that speaks MCP) can drive it
+directly. All logic stays in `src/` — the server is pure argument marshalling.
 
-Add it to `claude_desktop_config.json`:
+Build first, then add it to your client's MCP config — e.g. `claude_desktop_config.json`:
 
 ```json
 {
@@ -215,107 +273,254 @@ Add it to `claude_desktop_config.json`:
 }
 ```
 
-Run `npm run build` first so `dist/mcp/server.js` exists. The server speaks stdio MCP and
-takes no flags of its own — all configuration (seed URL, `irDir`, `maxPages`, `outDir`)
-is passed per tool call as arguments.
+Tool surface, verified against the built server over a live stdio handshake:
+
+| tool | arguments |
+|---|---|
+| `pombuilder_crawl` | `url` *(required)*, `irDir`, `maxPages`, `config` |
+| `pombuilder_generate` | `outDir`, `irDir` |
+| `pombuilder_diff` | `url` *(required)*, `irDir`, `config`, `json` |
+
+**Worth knowing before you wire it up:**
+
+- **Give it a few seconds to start.** The server imports Playwright at module load, so it isn't
+  responsive instantly. A client with an aggressive startup timeout may declare it dead before it
+  answers.
+- **`config` is how you reach everything else.** The tool arguments are deliberately minimal; anything
+  not listed (`contextOptions`/`storageState`, `exclude`, `loginDetection`, `maxDepth`, …) is set by
+  pointing `config` at a config file, loaded through the same loader the CLI uses. **This is the only way
+  to crawl an authenticated site over MCP.**
+- **MCP has no process exit code**, so `pombuilder_diff` returns an `Overall severity: …` line ahead of
+  the drift report instead, and `json: true` returns the same `DriftReport` shape the CLI's `--json`
+  prints.
+- **`pombuilder_generate` takes no `config` parameter** — it never opens a browser and has no auth
+  surface, so it reads only `outDir`/`irDir`. A minor asymmetry with the CLI, noted here rather than
+  papered over.
+- The unstable-page warning that `crawl`/`diff` print to stderr is returned in the MCP tool result too.
+
+---
+
+## CLI reference
+
+All four commands accept `-c, --config <path>`. `crawl`, `build` and `diff` also take a `[url]`
+positional that overrides `seed` when both are given.
+
+```bash
+node dist/src/cli.js crawl <url> [-c config.js]
+node dist/src/cli.js generate [-c config.js]
+node dist/src/cli.js build <url> [-c config.js]
+node dist/src/cli.js diff <url> [-c config.js] [--json]
+```
+
+- **`crawl`** — Crawls from `<url>`, harvests and resolves every interactive element and heading on one
+  representative page per route template — plus any element carrying a `data-testid` (or your configured
+  `testIdAttribute`) or a `status`/`alert` role; an ordinary label or paragraph with no stable handle of
+  its own is not harvested. Writes `<irDir>/notebook.json`. Nothing under `outDir` is touched.
+- **`generate`** — Notebook → TypeScript. Fails if no notebook exists yet.
+- **`build`** — `crawl` then `generate`. The day-to-day command.
+- **`diff`** — Re-crawls and compares against the stored notebook, writing nothing. Exits `0`/`1`/`2` by
+  severity; `--json` emits the full report.
+
+---
+
+## Configuration
+
+```js
+export default {
+  seed: 'https://example.com/',       // required unless passed on the CLI
+  outDir: 'tests',                    // where generated files land
+  irDir: '.pombuilder',               // where the notebook is cached
+  maxDepth: 3,                        // link-hops from the seed to follow
+  maxPages: 50,                       // hard cap on distinct URLs visited
+  include: [],                        // if non-empty, only these path patterns are crawled
+  exclude: [],                        // path patterns never crawled (matched against pathname only)
+  testIdAttribute: 'data-testid',     // attribute checked first when locating elements
+  loginUrlPattern: null,              // a substring checked against the landed URL (not a regex)
+  loginDetection: 'identifier-first', // how aggressively a page is treated as a login page — see below
+  respectRobots: true,                // honor the site's robots.txt
+  contextOptions: {},                 // passed straight through to browser.newContext()
+};
+```
+
+`include`/`exclude` match the URL **pathname only** (not the query string), so they can steer the crawler
+away from whole sections but cannot distinguish two URLs differing only in query parameters.
+
+### `contextOptions` — authenticated and gated crawls
+
+POMBuilder **never logs in on its own** — if it lands on something that looks like a login page it aborts
+loudly (`LoginRedirectError`) rather than harvesting a login form and calling it your app. To crawl
+behind auth, hand it a session Playwright already established:
+
+```js
+export default {
+  seed: 'https://app.example.com/dashboard',
+  contextOptions: {
+    // Cookie/session state saved earlier with `await context.storageState({ path })`.
+    storageState: './.auth/state.json',
+
+    // Header-based gates (staging bypass tokens, feature-flag headers, etc.).
+    extraHTTPHeaders: { 'x-bypass-token': process.env.BYPASS_TOKEN ?? '' },
+
+    // HTTP Basic Auth.
+    httpCredentials: { username: 'demo', password: process.env.DEMO_PASSWORD },
+  },
+};
+```
+
+`contextOptions` is passed to `browser.newContext()` unmodified, with two conveniences: a falsy
+`storageState` is dropped (so `storageState: process.env.STORAGE_STATE_PATH` needs no `if`), and any
+`extraHTTPHeaders` entry whose value is an empty string is stripped (so an unset environment variable
+never becomes the literal header value `"undefined"`).
+
+### `loginDetection` — tuning the login-redirect guard
+
+That abort is a heuristic, and one arm of it can false-positive: an ordinary **newsletter signup in a
+site footer** (email input + submit button) looks identical to an identifier-first login screen (Okta,
+Azure AD, Google Workspace, magic-link flows), which shows no password field on its first screen. A crawl
+of an otherwise-public retail or marketing site can abort on that footer form.
+
+| value | behavior |
+|---|---|
+| `'identifier-first'` **(default)** | `loginUrlPattern` match, OR a password field, OR an identifier field (email/username) paired with a submit control. |
+| `'password-only'` | `loginUrlPattern` match, OR a password field. Drops the identifier+submit arm — **this is what fixes the newsletter false positive.** |
+| `'off'` | No heuristics at all. For a site you know is fully public, or where `loginUrlPattern` alone should decide. |
+
+`loginUrlPattern`, when set, is honored in **every** mode including `'off'` — it's explicit configuration
+you supplied, not a heuristic, so relaxing detection never disables it.
+
+The strict default is deliberate: a false abort is loud and one config line away from fixed, while a
+false negative silently harvests an identity provider's DOM under your own site's name. If you hit
+`LoginRedirectError` on a page you know isn't a login page, that's the setting to reach for.
+
+### LLM name refinement (optional)
+
+Deterministic naming falls back to a role/tag base (`button1`, `link2`, …) whenever an element has no
+usable accessible name — commonly on a non-Latin-script site, since names are stripped to ASCII
+identifiers. POMBuilder can optionally send those *weakly-named* elements to Claude for a better name.
+
+- **What turns it on:** the `ANTHROPIC_API_KEY` environment variable — nothing in the config file. There
+  is no separate opt-in and no dry-run: **exporting this variable silently turns every applicable
+  `crawl` into a billed API call.** Unset it to keep `crawl` fully offline and free.
+- **What gets sent,** per weakly-named element: `id`, `role`, `testId`, up to 60 characters of text, and
+  the enclosing landmark. No locator, no selector, no surrounding page content.
+- **Where it's cached:** `<irDir>/names.json`, keyed by element id, reused on every later crawl. Commit
+  it so teammates and CI get refined names without a key.
+- **On failure:** never fails the build — it falls back to deterministic names silently. The
+  `@anthropic-ai/sdk` dependency is an optional peer dependency, imported lazily only when refinement
+  actually runs.
+- **How you'd notice you need it:** `crawl`/`build` warn when a page's naming degraded to role/tag
+  fallback for most of its elements.
+
+---
+
+## `unresolved` elements
+
+Every harvested element gets a `status` of `resolved` or `unresolved`. An element becomes `unresolved`
+when no candidate locator could be proven: every one either matched zero elements, matched more than one
+(even after narrowing to the element's own landmark), matched exactly one *hidden* element, or matched
+exactly one element that **wasn't the one harvested**.
+
+POMBuilder deliberately does not fall back to a weaker locator to force a resolution. An `unresolved`
+element is left out of the base class entirely — no getter — rather than shipping something that looks
+confident and breaks on the first markup shift. The count is printed by `crawl`/`build`, recorded in the
+base class header (`// unresolved: N`), and every rejected candidate with its match count and reason is
+kept in the notebook, so you can see exactly why and add a `data-testid` if you want it covered.
+
+In this project's own acceptance run against a live public storefront, 119 of 123 harvested elements
+resolved — about 97%.
+
+---
 
 ## Known limitations
 
 ### Pages that never hold still
 
-Before harvesting, POMBuilder waits for a page to stop changing: first for the network
-to go idle — which is what makes a single-page app's XHR-delivered content arrive
-before, rather than after, the harvest — and then for two consecutive 500 ms windows in
-which the DOM does not change, no request starts, and none is left outstanding.
+Before harvesting, POMBuilder waits for the network to go idle — which is what makes an SPA's
+XHR-delivered content arrive *before* the harvest — then for two consecutive 500 ms windows in which the
+DOM does not change, no request starts, and none is left outstanding.
 
-**What that guarantees, precisely.** The crawl is deterministic with respect to content
-whose request is issued within 1 second of the page going network-idle. It is not
-deterministic beyond that, and it cannot tell that it was not: past that edge a page
-that is about to fetch something looks exactly like one that has finished — nothing in
-flight, nothing moving, nothing left to observe — so POMBuilder records it as settled
-and says nothing. The edge is a real number rather than a promise because every bounded
-wait has one; there is no signal a page emits that means "I am done." In practice the
-edge lands well past a second after `domcontentloaded`, because network-idle itself does
-not arrive until the page has finished its initial burst (measured at 2.0-2.1 s after
-`domcontentloaded` on a React storefront and 0.55-0.92 s on a server-rendered WooCommerce
-page, the slower end of each on a cold cache).
+**What that guarantees, precisely.** The crawl is deterministic for content whose request is issued
+within 1 second of the page going network-idle. It is not deterministic beyond that, and it cannot tell
+that it wasn't: past that edge, a page about to fetch something looks exactly like one that has finished
+— nothing in flight, nothing moving, nothing left to observe. Every bounded wait has an edge; there is no
+signal a page emits meaning "I am done." Measured, network-idle itself lands 2.0–2.1 s after
+`domcontentloaded` on a React storefront and 0.55–0.92 s on a server-rendered WooCommerce page.
 
-**What it costs.** A page that settles promptly costs about 1.5 s per page load. A page
-that keeps making requests after it has gone idle -- an analytics beacon, a heartbeat, a
-session ping -- costs up to about 3.6 s instead, because each request restarts the
-confirmation and the wait runs to its internal limit. That is the ceiling, not the
-typical case, and it is per page load: a crawl of a beacon-carrying site is slower by
-roughly two seconds per page and route template. There is no setting for it.
+**What it costs.** ~1.5 s per page load for a page that settles promptly; up to ~3.6 s for one that keeps
+making requests after going idle (an analytics beacon, a heartbeat), because each request restarts the
+confirmation. There is no setting for the wait budget, deliberately — it's one of the few numbers that
+determines whether the notebook is reproducible, and a per-site override would make "POMBuilder is
+deterministic" a claim about someone's config rather than about the tool.
 
-**What it warns about.** Some pages never satisfy the wait at all: a carousel, a ticker,
-a polling widget, a CSS animation that churns a class attribute, or a page holding a
-long-lived request open (server-sent events, a long poll). Those are sampled at an
-arbitrary point rather than at a settled one, so the elements harvested from them can
-vary between runs and `diff` may report drift for elements that never actually changed.
-`crawl`, `build` and `diff` all name those pages on stderr, and the `pombuilder_crawl`
-and `pombuilder_diff` MCP tools return the same text in their tool result.
+**What it warns about.** Some pages never satisfy the wait: a carousel, a ticker, a polling widget, a CSS
+animation churning a class attribute, or a page holding a long-lived request open. Those are sampled at
+an arbitrary point, so harvested elements can vary between runs and `diff` may report drift for elements
+that never changed. `crawl`, `build` and `diff` name those pages on stderr with a reason.
 
-The warning is deliberately narrow, so that it means something when it fires. A page
-whose background requests never touch the DOM — analytics, telemetry, a keep-alive — is
-**not** warned about, even though those requests do make the page slower to settle: the
-DOM held still throughout, the harvest is the same one an identical page without the
-beacon would produce, and warning about it would fire on most commercial sites while
-saying nothing about the harvest. What is warned about is a page whose DOM was still
-changing, or still being changed by arriving content, when POMBuilder had to stop
-looking.
+The warning is deliberately narrow so it means something when it fires: a page whose background requests
+never touch the DOM (analytics, telemetry, keep-alives) is **not** warned about — the DOM held still, the
+harvest is identical to one without the beacon, and warning would fire on most commercial sites while
+saying nothing about the harvest.
 
-**What to do when it fires.** In order:
+**What to do when it fires.** Open the page and see what moves — the reason says which kind it is. Then
+check whether the page object actually has the members you need; the harvest is a real snapshot, just an
+early one, and everything in it was verified against the live DOM. Re-run `crawl` and `diff` the two to
+find which members are unreliable. If the page will genuinely never settle, keep the crawler off it with
+`exclude` and hand-write that one page object against the generated base class — the base/subclass split
+exists for exactly this. Use `exclude` for a page, never a whole site: a site-wide warning almost always
+means an animation in shared chrome.
 
-1. **Open the page and look at what moves.** The reason on each line says which kind it
-   is: `the DOM never stopped changing` is an animation, carousel or ticker;
-   `the page kept making requests` is content still streaming in; `the network never went
-   idle` is a long-lived connection.
-2. **Check the getters for that page object.** The harvest is a real snapshot, just an
-   early one, and everything in it was verified against the live DOM at the time. What a
-   warning means is that elements may be *missing*, not that the ones present are wrong.
-   If the page object has the members you need, the warning costs you nothing.
-3. **Re-run `crawl` and `diff` the two.** Drift on a warned page between two runs of an
-   unchanged site tells you which members are the unreliable ones.
-4. **If the page is genuinely never going to hold still**, keep the crawler off it with
-   `exclude`, and hand-write that one page object against the generated base class — the
-   base/subclass split exists for exactly this. Use `exclude` for a page, never for a
-   whole site: a site-wide warning almost always means an animation in shared chrome (a
-   header carousel, a marquee), and excluding every page is not the remedy.
+**What it does not warn about.** The notebook doesn't record which pages were unstable, so only the
+*fresh* side of a `diff` is covered. If yesterday's baseline was written from a moving page and today's
+site has settled, today's `diff` reports drift with nothing on stderr.
 
-**What it does not warn about.** The notebook does not record which pages were unstable,
-so only the *fresh* side of a `diff` is covered. If yesterday's `build` wrote its
-baseline from a moving page and today's site has settled, today's `diff` reports drift
-with nothing on stderr — the current crawl was fine, and the notebook cannot say the
-stored one was not. If a `diff` looks larger than the change that caused it, check the
-crawl log that produced the baseline before you suspect the site.
+### Same-page, state-mutating links
 
-There is no setting for the wait budget, deliberately: it is one of the few numbers that
-determines whether the notebook is reproducible, and a per-site override would make
-"POMBuilder is deterministic" a claim about someone's config rather than about the tool.
+The deny-list (`src/url/denyList.ts`) flags destructive-sounding words — `signout`, `logout`, `delete`,
+`remove`, `cancel`, `deactivate`, `unsubscribe`, `destroy` — in a link's href or text. A plain
+`<a href="?add-to-cart=123">` (a common WooCommerce pattern) reads as an ordinary link and passes
+straight through. Following one mutates shared session state for the rest of the crawl, so a later
+harvest of the same page can pick up elements a fresh browser session would never see — which is exactly
+what a generated smoke spec runs in. Steer around these with `exclude` or a narrower `maxDepth`.
 
-**Same-page, state-mutating links aren't recognised as such.** The deny-list
-(`src/url/denyList.ts`) only flags destructive-sounding words — sign-out, delete,
-remove, cancel, deactivate, unsubscribe, destroy — in a link's href or text. A plain
-`<a href="?add-to-cart=123">` (a common WooCommerce pattern, among others) reads as an
-ordinary link and passes straight through. If the crawler follows one, it mutates
-shared session state (a server-side cart, in that example) for the rest of the crawl,
-so a *later* harvest of what looks like the same, unchanged page can pick up elements
-that only exist because of that earlier visit — and those elements will not exist in a
-fresh browser session, which is exactly what a generated smoke spec runs in. This
-surfaced for real during this project's own acceptance run against
-`https://www.scrapingcourse.com/ecommerce/` (see `pombuilder.config.js`'s comments for
-the full trace) and is not something POMBuilder currently detects or guards against; if
-a target site has this shape of link, steer the crawler around it with `exclude` (or a
-narrower `maxDepth`) rather than relying on the deny-list to catch it.
+### Sites behind bot management
+
+Akamai/Cloudflare-style protection commonly rejects headless Chromium at the protocol layer —
+`net::ERR_HTTP2_PROTOCOL_ERROR` before any response arrives, even when a plain `curl` to the same URL
+returns 200. That's the site declining automation, not a POMBuilder bug. Use a staging environment, or
+get your test origin allowlisted by whoever owns the WAF configuration.
+
+### Collections
+
+Repeated-structure detection (parameterised accessors for product grids and similar) is a v1 stub. It
+does not fire on real-world markup and is documented as a known limitation rather than a working feature.
+
+---
 
 ## Fixed since the initial release
 
-**robots.txt was checked against the wrong URL.** `src/crawl/crawl.ts`'s
-link-discovery loop used to call `scrubUrl()` (which, among other things, strips a
-trailing slash) *before* checking `robots.isAllowed()`, so a `Disallow` rule anchored
-with a trailing slash — a very common robots.txt idiom — could be silently defeated for
-any query-string variant of that path. The check now runs against the original,
-browser-resolved `href`, before any normalisation, so a site's published rule is
-honoured exactly as written regardless of what URL canonicalisation happens afterwards.
-See `shouldFollow` in `src/crawl/crawl.ts` and its tests in `tests/unit/crawl.test.ts`
-for the fixed behaviour and the regression it guards against.
+**robots.txt was checked against the wrong URL.** The link-discovery loop used to call `scrubUrl()`
+(which strips a trailing slash, among other things) *before* checking `robots.isAllowed()`, so a
+`Disallow` rule anchored with a trailing slash — a very common robots.txt idiom — could be silently
+defeated for any query-string variant of that path. The check now runs against the original,
+browser-resolved `href` before any normalisation, so a site's published rule is honoured exactly as
+written. See `shouldFollow` in `src/crawl/crawl.ts` and its tests.
+
+---
+
+## How this was built
+
+The design and the plan it was executed from are both in this repo:
+
+- [`POMBuilder-design-v1.md`](./POMBuilder-design-v1.md) — the design: pipeline, locator ladder, naming,
+  authentication model, and the reasoning behind each locked decision.
+- [`docs/superpowers/plans/`](./docs/superpowers/plans/) — the implementation plan, plus a remediation
+  plan cataloguing every defect found in a full adversarial review of the first build, with evidence.
+
+The remediation document is worth a look if you're curious what a genuinely thorough review produces: the
+identity-verification guarantee, the crawl-determinism rebuild, and the element-fingerprint collision fix
+all came out of it.
+
+## License
+
+Apache 2.0 — see [LICENSE](./LICENSE).
