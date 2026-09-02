@@ -1,8 +1,8 @@
-# POMBuilder
+# Notary-POM
 
 **Generates Playwright page objects containing only locators it has proven work against the live page.**
 
-Point it at a URL. POMBuilder opens a real browser, waits for the page to actually stop moving, harvests
+Point it at a URL. Notary-POM opens a real browser, waits for the page to actually stop moving, harvests
 every interactive element, and then — for each one — tries a ladder of locator strategies **against the
 running DOM** until one provably resolves to the exact element it observed. What it cannot prove, it
 refuses to emit.
@@ -15,7 +15,7 @@ changed on the site.
 
 ## Why you'd use this
 
-Every codegen tool will happily hand you `getByTestId('search')`. POMBuilder runs that locator against
+Every codegen tool will happily hand you `getByTestId('search')`. Notary-POM runs that locator against
 the page first. Here is a real, unedited result from crawling a live storefront:
 
 ```
@@ -30,7 +30,7 @@ name: searchForInput2  |  locator: null   ← nothing was emitted
 
 Read `matched 1 | identity` again. The locator resolved to **exactly one element — and it was the wrong
 one.** That page has two search boxes (header and sidebar widget). A tool that asks *"is this unique?"*
-ships that locator with confidence. POMBuilder asks *"is this the element I actually harvested?"* — and
+ships that locator with confidence. Notary-POM asks *"is this the element I actually harvested?"* — and
 when it can't prove that, it emits **nothing**.
 
 You get a visible gap you can fix, instead of a green test quietly asserting against the wrong box.
@@ -197,7 +197,7 @@ export abstract class EcommercePageBase {
 without opening the notebook. Single-element actions (`clickX`, `fillX`, `checkX`, `selectX`) are derived
 from each element's role.
 
-**The subclass is yours forever.** POMBuilder writes it once, the first time it sees that class name,
+**The subclass is yours forever.** Notary-POM writes it once, the first time it sees that class name,
 then never touches it again — so your multi-step flows survive every re-crawl:
 
 ```ts
@@ -256,7 +256,7 @@ tooling instead.
 
 ## MCP server
 
-POMBuilder ships an [MCP](https://modelcontextprotocol.io) server exposing the same pipeline as tools, so
+Notary-POM ships an [MCP](https://modelcontextprotocol.io) server exposing the same pipeline as tools, so
 an MCP-aware client (Claude Desktop, Claude Code, or anything else that speaks MCP) can drive it
 directly. All logic stays in `src/` — the server is pure argument marshalling.
 
@@ -347,7 +347,7 @@ away from whole sections but cannot distinguish two URLs differing only in query
 
 ### `contextOptions` — authenticated and gated crawls
 
-POMBuilder **never logs in on its own** — if it lands on something that looks like a login page it aborts
+Notary-POM **never logs in on its own** — if it lands on something that looks like a login page it aborts
 loudly (`LoginRedirectError`) rather than harvesting a login form and calling it your app. To crawl
 behind auth, hand it a session Playwright already established:
 
@@ -396,7 +396,7 @@ false negative silently harvests an identity provider's DOM under your own site'
 
 Deterministic naming falls back to a role/tag base (`button1`, `link2`, …) whenever an element has no
 usable accessible name — commonly on a non-Latin-script site, since names are stripped to ASCII
-identifiers. POMBuilder can optionally send those *weakly-named* elements to Claude for a better name.
+identifiers. Notary-POM can optionally send those *weakly-named* elements to Claude for a better name.
 
 - **What turns it on:** the `ANTHROPIC_API_KEY` environment variable — nothing in the config file. There
   is no separate opt-in and no dry-run: **exporting this variable silently turns every applicable
@@ -420,7 +420,7 @@ when no candidate locator could be proven: every one either matched zero element
 (even after narrowing to the element's own landmark), matched exactly one *hidden* element, or matched
 exactly one element that **wasn't the one harvested**.
 
-POMBuilder deliberately does not fall back to a weaker locator to force a resolution. An `unresolved`
+Notary-POM deliberately does not fall back to a weaker locator to force a resolution. An `unresolved`
 element is left out of the base class entirely — no getter — rather than shipping something that looks
 confident and breaks on the first markup shift. The count is printed by `crawl`/`build`, recorded in the
 base class header (`// unresolved: N`), and every rejected candidate with its match count and reason is
@@ -435,7 +435,7 @@ resolved — about 97%.
 
 ### Pages that never hold still
 
-Before harvesting, POMBuilder waits for the network to go idle — which is what makes an SPA's
+Before harvesting, Notary-POM waits for the network to go idle — which is what makes an SPA's
 XHR-delivered content arrive *before* the harvest — then for two consecutive 500 ms windows in which the
 DOM does not change, no request starts, and none is left outstanding.
 
@@ -449,7 +449,7 @@ signal a page emits meaning "I am done." Measured, network-idle itself lands 2.0
 **What it costs.** ~1.5 s per page load for a page that settles promptly; up to ~3.6 s for one that keeps
 making requests after going idle (an analytics beacon, a heartbeat), because each request restarts the
 confirmation. There is no setting for the wait budget, deliberately — it's one of the few numbers that
-determines whether the notebook is reproducible, and a per-site override would make "POMBuilder is
+determines whether the notebook is reproducible, and a per-site override would make "Notary-POM is
 deterministic" a claim about someone's config rather than about the tool.
 
 **What it warns about.** Some pages never satisfy the wait: a carousel, a ticker, a polling widget, a CSS
@@ -487,7 +487,7 @@ what a generated smoke spec runs in. Steer around these with `exclude` or a narr
 
 Akamai/Cloudflare-style protection commonly rejects headless Chromium at the protocol layer —
 `net::ERR_HTTP2_PROTOCOL_ERROR` before any response arrives, even when a plain `curl` to the same URL
-returns 200. That's the site declining automation, not a POMBuilder bug. Use a staging environment, or
+returns 200. That's the site declining automation, not a Notary-POM bug. Use a staging environment, or
 get your test origin allowlisted by whoever owns the WAF configuration.
 
 ### Collections
@@ -505,21 +505,6 @@ does not fire on real-world markup and is documented as a known limitation rathe
 defeated for any query-string variant of that path. The check now runs against the original,
 browser-resolved `href` before any normalisation, so a site's published rule is honoured exactly as
 written. See `shouldFollow` in `src/crawl/crawl.ts` and its tests.
-
----
-
-## How this was built
-
-The design and the plan it was executed from are both in this repo:
-
-- [`POMBuilder-design-v1.md`](./POMBuilder-design-v1.md) — the design: pipeline, locator ladder, naming,
-  authentication model, and the reasoning behind each locked decision.
-- [`docs/superpowers/plans/`](./docs/superpowers/plans/) — the implementation plan, plus a remediation
-  plan cataloguing every defect found in a full adversarial review of the first build, with evidence.
-
-The remediation document is worth a look if you're curious what a genuinely thorough review produces: the
-identity-verification guarantee, the crawl-determinism rebuild, and the element-fingerprint collision fix
-all came out of it.
 
 ## License
 
