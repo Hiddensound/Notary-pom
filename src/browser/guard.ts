@@ -7,8 +7,9 @@ export class LoginRedirectError extends Error {
   constructor(url: string) {
     super(
       `Crawl aborted: landed on what looks like a login page (${url}). ` +
-      `The session has probably expired. Refresh your storageState and re-run. ` +
-      `Continuing would generate page objects that are all secretly LoginPage.`,
+      `If the session expired, refresh your storageState and re-run; if this page is not ` +
+      `actually a login page (e.g. a newsletter signup), set \`loginDetection: 'password-only'\` ` +
+      `in your config. Continuing would generate page objects that are all secretly LoginPage.`,
     );
     this.name = 'LoginRedirectError';
   }
@@ -37,10 +38,20 @@ export class OffOriginError extends Error {
 // tradeoff this project has already accepted for the password heuristic -- see the
 // Wave 9 ledger note on this function -- so the selector list stops here rather than
 // growing to chase every remaining shape.
+//
+// That identifier+submit arm is indistinguishable from an ordinary newsletter-signup
+// form, so `config.loginDetection` lets a caller relax it: `'identifier-first'` (default)
+// runs every check below; `'password-only'` drops the identifier/submit queries entirely
+// (never runs them -- not just discards the result); `'off'` drops the password check too,
+// so `loginUrlPattern` -- explicit user configuration, not a heuristic -- is the only
+// thing that can still fire.
 export async function looksLikeLogin(page: Page, config: PomBuilderConfig): Promise<boolean> {
   if (config.loginUrlPattern && page.url().includes(config.loginUrlPattern)) return true;
+  if (config.loginDetection === 'off') return false;
+
   const passwordFields = await page.locator('input[type="password"]').count();
   if (passwordFields > 0) return true;
+  if (config.loginDetection === 'password-only') return false;
 
   const identifierFields = await page.locator(
     'input[type="email"], input[autocomplete="username"], input[autocomplete="email"]',

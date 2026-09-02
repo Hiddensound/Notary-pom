@@ -64,6 +64,44 @@ test('looksLikeLogin stays false for an unrelated email field with no submit con
   expect(await looksLikeLogin(page, config)).toBe(false);
 });
 
+// The user's actual bug: a footer newsletter signup (email input + submit button, no
+// password field) is indistinguishable from an identifier-first login screen under the
+// default heuristic. `loginDetection: 'password-only'` is the escape hatch -- this is
+// the discriminating pair the config field exists to prove.
+test('looksLikeLogin: newsletter shape is true under the default and false under password-only', async ({ page }) => {
+  await page.setContent(
+    '<h1>Subscribe to our newsletter</h1>' +
+    '<form><input type="email" placeholder="you@example.com" /><button type="submit">Sign up</button></form>',
+  );
+  const defaultConfig = withDefaults({ seed: 'https://s.test' });
+  expect(await looksLikeLogin(page, defaultConfig)).toBe(true);
+
+  const passwordOnly = withDefaults({ seed: 'https://s.test', loginDetection: 'password-only' });
+  expect(await looksLikeLogin(page, passwordOnly)).toBe(false);
+});
+
+test('looksLikeLogin: a real password field is true under both identifier-first and password-only', async ({ page }) => {
+  await page.setContent('<form><input type="password" /><button type="submit">Sign in</button></form>');
+  const identifierFirst = withDefaults({ seed: 'https://s.test', loginDetection: 'identifier-first' });
+  expect(await looksLikeLogin(page, identifierFirst)).toBe(true);
+
+  const passwordOnly = withDefaults({ seed: 'https://s.test', loginDetection: 'password-only' });
+  expect(await looksLikeLogin(page, passwordOnly)).toBe(true);
+});
+
+test('looksLikeLogin: off drops even a password field, but an explicit loginUrlPattern still fires', async ({ page }) => {
+  const off = withDefaults({ seed: 'https://s.test', loginDetection: 'off' });
+  await page.setContent('<form><input type="password" /><button type="submit">Sign in</button></form>');
+  expect(await looksLikeLogin(page, off)).toBe(false);
+
+  const offWithPattern = withDefaults({
+    seed: 'https://s.test', loginDetection: 'off', loginUrlPattern: '/login',
+  });
+  await page.route('**/login', (r) => r.fulfill({ body: '<h1>Sign in</h1>' }));
+  await page.goto('https://s.test/login');
+  expect(await looksLikeLogin(page, offWithPattern)).toBe(true);
+});
+
 test('bindCandidate resolves the same node renderCandidate describes', async ({ page }) => {
   await page.setContent(`<nav><a data-testid="cart-link">Cart</a></nav>`);
   const loc = bindCandidate(page, {

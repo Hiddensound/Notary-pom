@@ -60,6 +60,16 @@ export interface RejectedCandidate {
 export type ElementStatus = 'resolved' | 'unresolved';
 export type NameSource = 'deterministic' | 'llm' | 'cached';
 
+// Controls how aggressively `looksLikeLogin` (src/browser/guard.ts) treats a landed page
+// as a login page. `'identifier-first'` is the default -- it also fires on an identifier
+// field (email/username) paired with a submit control, to catch identifier-first and
+// passwordless identity providers that show no password field on their first screen.
+// That arm is indistinguishable from an ordinary newsletter-signup form, so
+// `'password-only'` drops it while keeping the password-field guard, and `'off'` drops
+// all heuristics -- `loginUrlPattern` is still honored in every mode, since it is
+// explicit user configuration rather than a heuristic.
+export type LoginDetection = 'identifier-first' | 'password-only' | 'off';
+
 export interface IRElement {
   id: string;
   name: string;
@@ -120,6 +130,7 @@ export interface PomBuilderConfig {
   exclude: string[];
   testIdAttribute: string;
   loginUrlPattern: string | null;
+  loginDetection: LoginDetection;
   respectRobots: boolean;
   contextOptions: Record<string, unknown>;
 }

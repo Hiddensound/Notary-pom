@@ -30,6 +30,23 @@ describe('withDefaults', () => {
   it('still accepts a valid URL seed unchanged', () => {
     expect(withDefaults({ seed: 'https://shop.test/path' }).seed).toBe('https://shop.test/path');
   });
+
+  it('defaults loginDetection to identifier-first', () => {
+    expect(withDefaults({ seed: 'https://shop.test' }).loginDetection).toBe('identifier-first');
+  });
+
+  it.each(['identifier-first', 'password-only', 'off'] as const)(
+    'round-trips loginDetection: %s',
+    (loginDetection) => {
+      expect(withDefaults({ seed: 'https://shop.test', loginDetection }).loginDetection).toBe(loginDetection);
+    },
+  );
+
+  it('rejects an unrecognized loginDetection value', () => {
+    expect(() =>
+      withDefaults({ seed: 'https://shop.test', loginDetection: 'lax' as never }),
+    ).toThrow(/loginDetection/);
+  });
 });
 
 describe('loadConfig', () => {

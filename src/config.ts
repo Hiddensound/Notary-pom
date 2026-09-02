@@ -2,7 +2,9 @@
 
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
-import type { PomBuilderConfig } from './types.js';
+import type { LoginDetection, PomBuilderConfig } from './types.js';
+
+const LOGIN_DETECTION_VALUES: LoginDetection[] = ['identifier-first', 'password-only', 'off'];
 
 export function withDefaults(input: Partial<PomBuilderConfig>): PomBuilderConfig {
   if (!input.seed) throw new Error('config: `seed` is required');
@@ -10,6 +12,13 @@ export function withDefaults(input: Partial<PomBuilderConfig>): PomBuilderConfig
     new URL(input.seed);
   } catch {
     throw new Error(`config: \`seed\` must be a valid URL, got ${JSON.stringify(input.seed)}`);
+  }
+  const loginDetection = input.loginDetection ?? 'identifier-first';
+  if (!LOGIN_DETECTION_VALUES.includes(loginDetection)) {
+    throw new Error(
+      `config: \`loginDetection\` must be one of ${LOGIN_DETECTION_VALUES.map((v) => `"${v}"`).join(', ')}, ` +
+      `got ${JSON.stringify(loginDetection)}`,
+    );
   }
   return {
     seed: input.seed,
@@ -21,6 +30,7 @@ export function withDefaults(input: Partial<PomBuilderConfig>): PomBuilderConfig
     exclude: input.exclude ?? [],
     testIdAttribute: input.testIdAttribute ?? 'data-testid',
     loginUrlPattern: input.loginUrlPattern ?? null,
+    loginDetection,
     respectRobots: input.respectRobots ?? true,
     contextOptions: input.contextOptions ?? {},
   };
