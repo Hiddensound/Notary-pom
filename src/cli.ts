@@ -8,7 +8,7 @@ import { crawlSite, formatUnstable } from './crawl/crawl.js';
 import type { UnstablePage } from './crawl/crawl.js';
 import { readNotebook, writeNotebook } from './io/notebookStore.js';
 import { writeGenerated } from './io/writeOutput.js';
-import { formatDrift } from './diff/notebook.js';
+import { formatDrift, maxSeverity, severityToExitCode } from './diff/notebook.js';
 import { refinedDiff } from './diff/run.js';
 import { formatWeakNaming, refineNotebookNames } from './name/llm.js';
 
@@ -63,9 +63,9 @@ program.command('build').argument('[url]').option('-c, --config <path>')
     await program.parseAsync(['generate', ...(opts.config ? ['-c', opts.config] : [])], { from: 'user' });
   });
 
-program.command('diff').argument('[url]').option('-c, --config <path>')
-  .description('compare a fresh crawl against the stored notebook')
-  .action(async (url: string | undefined, opts: { config?: string }) => {
+program.command('diff').argument('[url]').option('-c, --config <path>').option('--json', 'emit the DriftReport as JSON')
+  .description('compare a fresh crawl against the stored notebook; exit 0 none, 1 info/warning, 2 regression')
+  .action(async (url: string | undefined, opts: { config?: string; json?: boolean }) => {
     const config = await loadConfig(opts.config, url ? { seed: url } : {});
     const previous = await readNotebook(config.irDir);
     if (!previous) throw new Error('No stored notebook to compare against.');
@@ -73,10 +73,12 @@ program.command('diff').argument('[url]').option('-c, --config <path>')
     try {
       const unstable: UnstablePage[] = [];
       const next = await crawlSite(browser, config, undefined, (u) => unstable.push(u));
-      console.log(formatDrift(await refinedDiff(previous, next, config)));
+      const report = await refinedDiff(previous, next, config);
+      console.log(opts.json ? JSON.stringify(report, null, 2) : formatDrift(report));
       // Drift reported off an unstable sample is exactly the spurious drift this warning
       // exists to explain, so it belongs on the diff path as much as on the crawl path.
       if (unstable.length) console.warn(formatUnstable(unstable));
+      process.exitCode = severityToExitCode(maxSeverity(report));
     } finally {
       await browser.close();
     }
