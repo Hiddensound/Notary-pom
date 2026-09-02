@@ -41,6 +41,16 @@ describe('mcp server', () => {
     expect(tool.inputSchema.shape.config.isOptional()).toBe(true);
   });
 
+  // Task 18: MCP parity for the CLI's `--json` drift flag -- without this, severity
+  // classification would be CLI-only, reopening the same CLI/MCP asymmetry Wave 4B closed
+  // for authenticated crawls.
+  it('pombuilder_diff accepts an optional json flag', () => {
+    const server = buildServer();
+    const tool = server['_registeredTools']['pombuilder_diff'];
+    expect(tool.inputSchema.shape.json).toBeDefined();
+    expect(tool.inputSchema.shape.json.isOptional()).toBe(true);
+  });
+
   // pombuilder_generate had no equivalent check at all -- its registration could be
   // deleted entirely and no test would notice. Checks a real, identifying field on its
   // schema (outDir), not just existence of the tool, so this isn't vacuous either.

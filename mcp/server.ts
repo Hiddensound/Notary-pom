@@ -9,7 +9,7 @@ import { crawlSite, formatUnstable } from '../src/crawl/crawl.js';
 import type { UnstablePage } from '../src/crawl/crawl.js';
 import { readNotebook, writeNotebook } from '../src/io/notebookStore.js';
 import { writeGenerated } from '../src/io/writeOutput.js';
-import { formatDrift } from '../src/diff/notebook.js';
+import { formatDrift, maxSeverity } from '../src/diff/notebook.js';
 import { refinedDiff } from '../src/diff/run.js';
 import { formatWeakNaming, refineNotebookNames } from '../src/name/llm.js';
 
@@ -62,8 +62,8 @@ export function buildServer(): McpServer {
 
   server.tool('pombuilder_diff',
     'Re-crawl and report locator drift against the stored notebook.',
-    { url: z.string().url(), irDir: z.string().optional(), config: z.string().optional() },
-    async ({ url, irDir, config: configPath }) => {
+    { url: z.string().url(), irDir: z.string().optional(), config: z.string().optional(), json: z.boolean().optional() },
+    async ({ url, irDir, config: configPath, json }) => {
       const config = await loadConfig(configPath, { seed: url, irDir });
       const previous = await readNotebook(config.irDir);
       if (!previous) return text('No stored notebook to compare against.');
@@ -71,8 +71,23 @@ export function buildServer(): McpServer {
       try {
         const unstable: UnstablePage[] = [];
         const next = await crawlSite(browser, config, undefined, (u) => unstable.push(u));
+        const report = await refinedDiff(previous, next, config);
+        if (json) {
+          // Keep this content item exactly the serialized `DriftReport` -- identical to
+          // what the CLI's `--json` prints to stdout -- so a caller can `JSON.parse` it
+          // directly. The unstable-crawl warning (the CLI's stderr-only `console.warn`)
+          // has no stdout/stderr split in MCP's single response, so when present it rides
+          // as a second content block instead of being spliced into the JSON text.
+          const content = [{ type: 'text' as const, text: JSON.stringify(report, null, 2) }];
+          if (unstable.length) content.push({ type: 'text' as const, text: formatUnstable(unstable) });
+          return { content };
+        }
         const warning = unstable.length ? `\n\n${formatUnstable(unstable)}` : '';
-        return text(`${formatDrift(await refinedDiff(previous, next, config))}${warning}`);
+        // `formatDrift` already annotates each element line with `[severity]`, but a
+        // caller here is often another agent, not a human scanning every line -- this
+        // summary is the MCP-side equivalent of what the CLI communicates structurally
+        // via its exit code.
+        return text(`Overall severity: ${maxSeverity(report)}\n${formatDrift(report)}${warning}`);
       } finally {
         await browser.close();
       }
