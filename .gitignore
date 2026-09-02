@@ -10,3 +10,11 @@ playwright-report/
 # running the crawler against a live site, analogous to a build cache - never meant to
 # be committed, in this repo or in a project that depends on POMBuilder.
 .pombuilder/
+
+# Internal design and planning documents. Working material, not part of the
+# published project - deliberately kept out of the repository. These live on
+# disk locally; `git rm --cached` untracked them, and these entries stop them
+# being re-added by a `git add -A`.
+POMBuilder-design-v1.md
+docs/superpowers/plans/POMBuilder-design-v1.md
+docs/superpowers/plans/POMBuilder-v1-remediation.md
