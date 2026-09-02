@@ -13,7 +13,7 @@ import { refinedDiff } from './diff/run.js';
 import { formatWeakNaming, refineNotebookNames } from './name/llm.js';
 
 const program = new Command();
-program.name('pombuilder').description('Generate verified Playwright page objects').version('0.1.0');
+program.name('notary-pom').description('Generate verified Playwright page objects').version('0.1.0');
 
 program.command('crawl').argument('[url]').option('-c, --config <path>')
   .description('crawl and write the notebook')

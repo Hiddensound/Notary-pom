@@ -56,8 +56,34 @@ npx playwright install chromium
 npm run build
 ```
 
-`npm run build` compiles `src/` and `mcp/` to `dist/`. The CLI entry point is `dist/src/cli.js` (also
-exposed as the `pombuilder` bin once the package is installed globally or linked).
+`npm run build` compiles `src/` and `mcp/` to `dist/`.
+
+To get the short `notary-pom` command on your PATH:
+
+```bash
+npm link
+```
+
+That gives you `notary-pom` and the shorter alias `npom` — both the same binary:
+
+```bash
+notary-pom crawl -c demo.config.js
+npom crawl -c demo.config.js
+```
+
+**Don't want a global install?** Every command is also an npm script. Note the `--`, which is
+what passes the flags through to the CLI rather than to npm:
+
+```bash
+npm run crawl -- -c demo.config.js
+```
+
+`crawl`, `generate`, `diff` and `build:pom` are all available that way. Or call the built entry
+point directly, which always works with no setup at all:
+
+```bash
+node dist/src/cli.js crawl -c demo.config.js
+```
 
 ---
 
@@ -86,7 +112,7 @@ export default {
 ### 2. Crawl
 
 ```bash
-node dist/src/cli.js crawl -c demo.config.js
+notary-pom crawl -c demo.config.js
 ```
 
 ```
@@ -122,7 +148,7 @@ evidence you need to go ask a developer for a handful of `data-testid` attribute
 ### 4. Generate
 
 ```bash
-node dist/src/cli.js generate -c demo.config.js
+notary-pom generate -c demo.config.js
 ```
 
 ```
@@ -156,7 +182,7 @@ generator sloppiness.
 `crawl` + `generate` in one step is `build`:
 
 ```bash
-node dist/src/cli.js build -c demo.config.js
+notary-pom build -c demo.config.js
 ```
 
 ---
@@ -217,7 +243,7 @@ The notebook is meant to be **committed**. That makes `diff` a structural compar
 locator health — not a single failing selector discovered after a test already broke.
 
 ```bash
-node dist/src/cli.js diff -c demo.config.js
+notary-pom diff -c demo.config.js
 ```
 
 Simulating a developer removing a `data-testid`:
@@ -306,10 +332,10 @@ All four commands accept `-c, --config <path>`. `crawl`, `build` and `diff` also
 positional that overrides `seed` when both are given.
 
 ```bash
-node dist/src/cli.js crawl <url> [-c config.js]
-node dist/src/cli.js generate [-c config.js]
-node dist/src/cli.js build <url> [-c config.js]
-node dist/src/cli.js diff <url> [-c config.js] [--json]
+notary-pom crawl <url> [-c config.js]
+notary-pom generate [-c config.js]
+notary-pom build <url> [-c config.js]
+notary-pom diff <url> [-c config.js] [--json]
 ```
 
 - **`crawl`** — Crawls from `<url>`, harvests and resolves every interactive element and heading on one

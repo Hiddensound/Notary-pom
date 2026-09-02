@@ -1,5 +1,5 @@
 {
-  "name": "pombuilder",
+  "name": "notary-pom",
   "version": "0.1.0",
   "license": "Apache-2.0",
   "type": "module",
@@ -7,12 +7,17 @@
     "node": ">=20"
   },
   "bin": {
-    "pombuilder": "./dist/src/cli.js"
+    "notary-pom": "./dist/src/cli.js",
+    "npom": "./dist/src/cli.js"
   },
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
-    "test:browser": "playwright test"
+    "test:browser": "playwright test",
+    "crawl": "node dist/src/cli.js crawl",
+    "generate": "node dist/src/cli.js generate",
+    "build:pom": "node dist/src/cli.js build",
+    "diff": "node dist/src/cli.js diff"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
