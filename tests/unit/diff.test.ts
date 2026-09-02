@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { diffNotebooks, formatDrift } from '../../src/diff/notebook.js';
+import { diffNotebooks, formatDrift, maxSeverity, severityToExitCode } from '../../src/diff/notebook.js';
 import { refinedDiff } from '../../src/diff/run.js';
 import type { IRElement, Notebook, PageIR, PomBuilderConfig } from '../../src/types.js';
 
@@ -24,7 +24,7 @@ const pg = (elements: IRElement[]): PageIR => ({
 describe('diffNotebooks', () => {
   it('reports an added element', () => {
     const r = diffNotebooks(nb([pg([el('a')])]), nb([pg([el('a'), el('b')])]));
-    expect(r.elements).toEqual([{ page: '/p', id: 'b', name: 'someButton', change: 'added', detail: 'testId' }]);
+    expect(r.elements).toEqual([{ page: '/p', id: 'b', name: 'someButton', change: 'added', detail: 'testId', severity: 'info' }]);
   });
 
   it('reports a removed element', () => {
@@ -90,14 +90,88 @@ describe('diffNotebooks', () => {
 
     const r = diffNotebooks(nb([pg([first, second])]), nb([pg([firstRegressed, second])]));
     expect(r.elements).toEqual([
-      { page: '/p', id: 'el_abc123456789', name: 'goButton', change: 'nowUnresolved', detail: 'no unique locator' },
+      {
+        page: '/p', id: 'el_abc123456789', name: 'goButton', change: 'nowUnresolved',
+        detail: 'no unique locator', severity: 'regression',
+      },
     ]);
+  });
+});
+
+describe('severity classification', () => {
+  it('marks a strategy downgrade to a fragile candidate as a regression', () => {
+    const before = el('a');
+    const after = el('a', {
+      locator: { scope: null, fragile: true, candidate: { strategy: 'css', value: 'body>button' } },
+    });
+    const r = diffNotebooks(nb([pg([before])]), nb([pg([after])]));
+    expect(r.elements[0].severity).toBe('regression');
+  });
+
+  it('marks a strategy upgrade to a non-fragile candidate as a warning, not a regression', () => {
+    const before = el('a', {
+      locator: { scope: null, fragile: true, candidate: { strategy: 'css', value: 'body>button' } },
+    });
+    const after = el('a');
+    const r = diffNotebooks(nb([pg([before])]), nb([pg([after])]));
+    expect(r.elements[0].severity).toBe('warning');
+  });
+
+  it('marks a stopped-resolving element as a regression', () => {
+    const after = el('a', { status: 'unresolved', locator: null });
+    const r = diffNotebooks(nb([pg([el('a')])]), nb([pg([after])]));
+    expect(r.elements[0].severity).toBe('regression');
+  });
+});
+
+describe('maxSeverity', () => {
+  it('is none for an unchanged notebook', () => {
+    expect(maxSeverity(diffNotebooks(nb([pg([el('a')])]), nb([pg([el('a')])])))).toBe('none');
+  });
+
+  it('is regression when any element regressed, regardless of other drift', () => {
+    const after = el('a', { status: 'unresolved', locator: null });
+    const r = diffNotebooks(nb([pg([el('a'), el('b')])]), nb([pg([after, el('b')])]));
+    expect(maxSeverity(r)).toBe('regression');
+  });
+
+  it('is warning for a removed page with no element-level drift', () => {
+    const r = diffNotebooks(nb([pg([]), { ...pg([]), routeTemplate: '/q' }]), nb([pg([])]));
+    expect(maxSeverity(r)).toBe('warning');
+  });
+
+  it('is info when only additions are present', () => {
+    const r = diffNotebooks(nb([pg([el('a')])]), nb([pg([el('a'), el('b')])]));
+    expect(maxSeverity(r)).toBe('info');
+  });
+});
+
+describe('severityToExitCode', () => {
+  it('maps none to 0', () => {
+    expect(severityToExitCode('none')).toBe(0);
+  });
+
+  it('maps info to 1', () => {
+    expect(severityToExitCode('info')).toBe(1);
+  });
+
+  it('maps warning to 1', () => {
+    expect(severityToExitCode('warning')).toBe(1);
+  });
+
+  it('maps regression to 2', () => {
+    expect(severityToExitCode('regression')).toBe(2);
   });
 });
 
 describe('formatDrift', () => {
   it('says so when nothing changed', () => {
     expect(formatDrift({ addedPages: [], removedPages: [], elements: [] })).toBe('No drift detected.');
+  });
+
+  it('annotates each element line with its severity', () => {
+    const r = diffNotebooks(nb([pg([el('a')])]), nb([pg([el('a'), el('b')])]));
+    expect(formatDrift(r)).toContain('[info]');
   });
 });
 
@@ -144,7 +218,7 @@ describe('refinedDiff', () => {
     // And that shared behavior is still the pre-fix asymmetry the common no-key path keeps:
     // a name difference is reported as a rename, since refinement never ran.
     expect(r.elements).toEqual([
-      { page: '/p', id: 'a', name: 'button', change: 'renamed', detail: 'submitOrderButton -> button' },
+      { page: '/p', id: 'a', name: 'button', change: 'renamed', detail: 'submitOrderButton -> button', severity: 'info' },
     ]);
   });
 });
